@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "OpenAI Real Time Assistant",
+        "description": "Add the Linux OpenAI Real Time Assistant integration."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only a single OpenAI Real Time Assistant integration is supported."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "OpenAI Real Time Assistant Settings",
+        "description": "Change the Linux assistant runtime settings."
+      }
+    }
+  }
+}

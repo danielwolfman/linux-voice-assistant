@@ -7,7 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, SETTINGS_ENTITY_NAME
+from .const import DOMAIN
 from .entity import RealtimeSatelliteEntity
 from .manager import RealtimeSatelliteSettingsManager
 
@@ -16,46 +16,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     manager: RealtimeSatelliteSettingsManager = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
-            RealtimeSatelliteSettingsSensor(manager),
-            RealtimeSatelliteActivitySensor(manager),
             RealtimeSatelliteUsageCostSensor(manager, hours=1),
             RealtimeSatelliteUsageCostSensor(manager, hours=24),
             RealtimeSatelliteUsageTokensSensor(manager, hours=1),
             RealtimeSatelliteUsageTokensSensor(manager, hours=24),
         ]
     )
-
-
-class RealtimeSatelliteSettingsSensor(RealtimeSatelliteEntity, SensorEntity):
-    _attr_name = SETTINGS_ENTITY_NAME
-    _attr_unique_id = "realtime_satellite_settings"
-    _attr_icon = "mdi:tune-variant"
-
-    @property
-    def native_value(self) -> int:
-        return self.manager.revision
-
-    @property
-    def extra_state_attributes(self):
-        return self.manager.sensor_attributes()
-
-
-class RealtimeSatelliteActivitySensor(RealtimeSatelliteEntity, SensorEntity):
-    _attr_name = "Activity Log"
-    _attr_unique_id = "openai_real_time_assistant_activity_log"
-    _attr_icon = "mdi:text-box-search"
-
-    @property
-    def native_value(self) -> int:
-        return len(self.manager.activities)
-
-    @property
-    def extra_state_attributes(self):
-        recent = self.manager.recent_activities()
-        latest = recent[0] if recent else None
-        return {"latest_activity": latest, "recent_activities": recent}
-
-
 class RealtimeSatelliteUsageCostSensor(RealtimeSatelliteEntity, SensorEntity):
     _attr_icon = "mdi:currency-usd"
     _attr_native_unit_of_measurement = "USD"
@@ -68,7 +34,7 @@ class RealtimeSatelliteUsageCostSensor(RealtimeSatelliteEntity, SensorEntity):
 
     @property
     def native_value(self) -> float:
-        return round(float(self.manager.usage_summary(self.hours)["cost_usd"]), 6)
+        return round(float(self.manager.usage_summary(self.hours)["cost_usd"]), 1)
 
     @property
     def extra_state_attributes(self):

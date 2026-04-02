@@ -4,19 +4,21 @@ from __future__ import annotations
 
 from homeassistant.const import Platform
 
-DOMAIN = "realtime_satellite"
+DOMAIN = "openai_real_time_assistant"
 UPDATE_SIGNAL = f"{DOMAIN}_updated"
 STORAGE_KEY = f"{DOMAIN}.settings"
 HISTORY_STORAGE_KEY = f"{DOMAIN}.history"
 STORAGE_VERSION = 1
-SETTINGS_ENTITY_NAME = "OpenAI Real Time Assistant Settings"
+SETTINGS_ENTITY_NAME = "Settings"
 SETTINGS_ENTITY_MARKER = "settings_entity"
 SERVICE_APPLY_SETTINGS = "apply_settings"
 SERVICE_REFRESH_OPENAI_CATALOG = "refresh_openai_catalog"
+SERVICE_REFRESH_OPENAI_USAGE = "refresh_openai_usage"
 SERVICE_RECORD_ACTIVITY = "record_activity"
 SERVICE_RECORD_USAGE = "record_usage"
 
 ACTIVITY_HISTORY_LIMIT = 200
+USAGE_REFRESH_INTERVAL_MINUTES = 15
 
 PLATFORMS = [Platform.SENSOR, Platform.TEXT, Platform.NUMBER, Platform.SWITCH, Platform.SELECT]
 
@@ -25,6 +27,7 @@ DEFAULT_OPENAI_VOICE_OPTIONS = ["alloy", "ash", "ballad", "cedar", "coral", "ech
 
 DEFAULT_SETTINGS: dict[str, object] = {
     "openai_api_key": "",
+    "openai_admin_api_key": "",
     "openai_model": "gpt-realtime",
     "openai_voice": "marin",
     "openai_instructions": (
@@ -59,7 +62,7 @@ SELECT_SETTINGS: dict[str, dict[str, object]] = {
     "openai_voice": {"name": "OpenAI Voice", "options_key": "openai_voice_options", "fallback": DEFAULT_OPENAI_VOICE_OPTIONS},
 }
 
-PRIVATE_SETTINGS = {"openai_api_key"}
+PRIVATE_SETTINGS = {"openai_api_key", "openai_admin_api_key"}
 
 NUMBER_SETTINGS: dict[str, dict[str, object]] = {
     "session_timeout_seconds": {"name": "Session Timeout", "min": 1.0, "max": 120.0, "step": 1.0, "unit": "s"},

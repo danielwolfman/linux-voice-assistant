@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.helpers.event import async_track_time_interval
 import voluptuous as vol
 
-from .const import DEFAULT_SETTINGS, DOMAIN, PLATFORMS, SERVICE_APPLY_SETTINGS, SERVICE_RECORD_ACTIVITY, SERVICE_RECORD_USAGE, SERVICE_REFRESH_OPENAI_CATALOG
+from .const import DEFAULT_SETTINGS, DOMAIN, PLATFORMS, SERVICE_APPLY_SETTINGS, SERVICE_RECORD_ACTIVITY, SERVICE_REFRESH_OPENAI_CATALOG, SERVICE_REFRESH_OPENAI_USAGE, USAGE_REFRESH_INTERVAL_MINUTES
 from .manager import RealtimeSatelliteSettingsManager
 
 
@@ -29,13 +31,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     domain_data[entry.entry_id] = manager
     await _register_services(hass, manager)
+    if "usage_unsub" not in domain_data:
+        @callback
+        def _schedule_usage_refresh(now) -> None:
+            del now
+            hass.async_create_task(manager.async_refresh_usage())
+
+        domain_data["usage_unsub"] = async_track_time_interval(hass, _schedule_usage_refresh, timedelta(minutes=USAGE_REFRESH_INTERVAL_MINUTES))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    domain_data = hass.data.get(DOMAIN, {})
+    domain_data.pop(entry.entry_id, None)
     return unload_ok
 
 
@@ -51,6 +61,8 @@ async def _register_services(hass: HomeAssistant, manager: RealtimeSatelliteSett
                 await manager.async_update_setting(key, call.data[key])
         if "openai_api_key" in call.data:
             await manager.async_refresh_catalog()
+        if "openai_admin_api_key" in call.data:
+            await manager.async_refresh_usage()
 
     hass.services.async_register(DOMAIN, SERVICE_APPLY_SETTINGS, async_apply_settings, schema=service_schema)
 
@@ -59,6 +71,12 @@ async def _register_services(hass: HomeAssistant, manager: RealtimeSatelliteSett
         await manager.async_refresh_catalog()
 
     hass.services.async_register(DOMAIN, SERVICE_REFRESH_OPENAI_CATALOG, async_refresh_catalog)
+
+    async def async_refresh_usage(call: ServiceCall) -> None:
+        del call
+        await manager.async_refresh_usage()
+
+    hass.services.async_register(DOMAIN, SERVICE_REFRESH_OPENAI_USAGE, async_refresh_usage)
 
     activity_schema = vol.Schema(
         {
@@ -72,23 +90,3 @@ async def _register_services(hass: HomeAssistant, manager: RealtimeSatelliteSett
         await manager.async_record_activity(str(call.data["category"]), str(call.data["message"]), dict(call.data.get("details", {})))
 
     hass.services.async_register(DOMAIN, SERVICE_RECORD_ACTIVITY, async_record_activity, schema=activity_schema)
-
-    usage_schema = vol.Schema(
-        {
-            vol.Required("model"): str,
-            vol.Required("input_tokens"): vol.Coerce(int),
-            vol.Required("output_tokens"): vol.Coerce(int),
-            vol.Required("total_tokens"): vol.Coerce(int),
-            vol.Required("cost_usd"): vol.Coerce(float),
-            vol.Optional("input_text_tokens", default=0): vol.Coerce(int),
-            vol.Optional("input_audio_tokens", default=0): vol.Coerce(int),
-            vol.Optional("output_text_tokens", default=0): vol.Coerce(int),
-            vol.Optional("output_audio_tokens", default=0): vol.Coerce(int),
-            vol.Optional("cached_input_tokens", default=0): vol.Coerce(int),
-        }
-    )
-
-    async def async_record_usage(call: ServiceCall) -> None:
-        await manager.async_record_usage(dict(call.data))
-
-    hass.services.async_register(DOMAIN, SERVICE_RECORD_USAGE, async_record_usage, schema=usage_schema)

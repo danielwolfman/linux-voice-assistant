@@ -12,6 +12,7 @@ from homeassistant.helpers.storage import Store
 
 from .catalog import fetch_openai_catalog, load_openai_api_key
 from .const import ACTIVITY_HISTORY_LIMIT, DEFAULT_OPENAI_MODEL_OPTIONS, DEFAULT_OPENAI_VOICE_OPTIONS, DEFAULT_SETTINGS, DOMAIN, HISTORY_STORAGE_KEY, PRIVATE_SETTINGS, SETTINGS_ENTITY_MARKER, STORAGE_KEY, STORAGE_VERSION, UPDATE_SIGNAL
+from .usage_api import fetch_usage_summaries
 
 
 class RealtimeSatelliteSettingsManager:
@@ -25,7 +26,10 @@ class RealtimeSatelliteSettingsManager:
             "openai_voice_options": list(DEFAULT_OPENAI_VOICE_OPTIONS),
         }
         self.activities: list[dict[str, Any]] = []
-        self.usage_events: list[dict[str, Any]] = []
+        self.usage_summary_cache: dict[str, dict[str, float | int]] = {
+            "usage_last_hour": {"count": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0},
+            "usage_last_24_hours": {"count": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0},
+        }
         self.revision = 0
 
     async def async_load(self) -> None:
@@ -36,9 +40,12 @@ class RealtimeSatelliteSettingsManager:
         history = await self._history_store.async_load()
         if isinstance(history, dict):
             self.activities = list(history.get("activities", []))
-            self.usage_events = list(history.get("usage_events", []))
-        self._prune_history()
+            cached_summary = history.get("usage_summary_cache")
+            if isinstance(cached_summary, dict):
+                self.usage_summary_cache.update(cached_summary)
+        self._prune_activities()
         await self.async_refresh_catalog()
+        await self.async_refresh_usage()
 
     async def async_refresh_catalog(self) -> None:
         stored_api_key = self.settings.get("openai_api_key")
@@ -55,6 +62,8 @@ class RealtimeSatelliteSettingsManager:
         self.revision += 1
         await self._store.async_save(self.settings)
         async_dispatcher_send(self.hass, UPDATE_SIGNAL)
+        if key == "openai_admin_api_key":
+            await self.async_refresh_usage()
 
     async def async_record_activity(self, category: str, message: str, details: dict[str, Any] | None = None) -> None:
         entry = {
@@ -72,34 +81,29 @@ class RealtimeSatelliteSettingsManager:
                 "name": "OpenAI Real Time Assistant",
                 "message": f"{category}: {message}",
                 "domain": DOMAIN,
+                "entity_id": "sensor.openai_real_time_assistant_cost_last_1h",
             },
             blocking=False,
         )
         await self._save_history()
         async_dispatcher_send(self.hass, UPDATE_SIGNAL)
 
-    async def async_record_usage(self, usage: dict[str, Any]) -> None:
-        entry = {"timestamp": _utcnow_iso(), **usage}
-        self.usage_events.append(entry)
-        self._prune_history()
+    async def async_refresh_usage(self) -> None:
+        admin_key = str(self.settings.get("openai_admin_api_key") or "").strip()
+        if not admin_key:
+            return
+        try:
+            self.usage_summary_cache = await fetch_usage_summaries(admin_key)
+        except Exception:
+            return
         await self._save_history()
         async_dispatcher_send(self.hass, UPDATE_SIGNAL)
 
     async def _save_history(self) -> None:
-        await self._history_store.async_save({"activities": self.activities, "usage_events": self.usage_events})
+        await self._history_store.async_save({"activities": self.activities, "usage_summary_cache": self.usage_summary_cache})
 
-    def _prune_history(self) -> None:
+    def _prune_activities(self) -> None:
         self.activities = self.activities[-ACTIVITY_HISTORY_LIMIT:]
-        cutoff = datetime.now(tz=UTC) - timedelta(hours=48)
-        kept_usage = []
-        for event in self.usage_events:
-            try:
-                ts = datetime.fromisoformat(str(event.get("timestamp")))
-            except Exception:
-                continue
-            if ts >= cutoff:
-                kept_usage.append(event)
-        self.usage_events = kept_usage
 
     @callback
     def recent_activities(self) -> list[dict[str, Any]]:
@@ -107,27 +111,8 @@ class RealtimeSatelliteSettingsManager:
 
     @callback
     def usage_summary(self, hours: int) -> dict[str, float | int]:
-        cutoff = datetime.now(tz=UTC) - timedelta(hours=hours)
-        summary = {
-            "count": 0,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-            "cost_usd": 0.0,
-        }
-        for event in self.usage_events:
-            try:
-                ts = datetime.fromisoformat(str(event.get("timestamp")))
-            except Exception:
-                continue
-            if ts < cutoff:
-                continue
-            summary["count"] += 1
-            summary["input_tokens"] += int(event.get("input_tokens", 0))
-            summary["output_tokens"] += int(event.get("output_tokens", 0))
-            summary["total_tokens"] += int(event.get("total_tokens", 0))
-            summary["cost_usd"] += float(event.get("cost_usd", 0.0))
-        return summary
+        key = "usage_last_hour" if hours == 1 else "usage_last_24_hours"
+        return dict(self.usage_summary_cache.get(key, {"count": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}))
 
     @callback
     def sensor_attributes(self) -> dict[str, Any]:

@@ -34,9 +34,11 @@ class OpenAIRealtimeClient:
         api_base: Optional[str] = None,
         on_audio_delta: Callable[[bytes], Awaitable[None]],
         on_response_created: Callable[[str], Awaitable[None]],
-        on_response_done: Callable[[str, str, dict[str, int], str], Awaitable[None]],
-        on_tool_call_started: Callable[[str], Awaitable[None]],
-        on_tool_call_finished: Callable[[str], Awaitable[None]],
+        on_response_done: Callable[[str, str, dict[str, int], str, str], Awaitable[None]],
+        on_user_transcript: Callable[[str], Awaitable[None]],
+        on_assistant_transcript: Callable[[str], Awaitable[None]],
+        on_tool_call_started: Callable[[str, dict[str, Any]], Awaitable[None]],
+        on_tool_call_finished: Callable[[str, dict[str, Any]], Awaitable[None]],
         on_end_session_requested: Callable[[str], Awaitable[None]],
         on_error: Callable[[str, str], Awaitable[None]],
     ) -> None:
@@ -48,6 +50,8 @@ class OpenAIRealtimeClient:
         self._on_audio_delta = on_audio_delta
         self._on_response_created = on_response_created
         self._on_response_done = on_response_done
+        self._on_user_transcript = on_user_transcript
+        self._on_assistant_transcript = on_assistant_transcript
         self._on_tool_call_started = on_tool_call_started
         self._on_tool_call_finished = on_tool_call_finished
         self._on_end_session_requested = on_end_session_requested
@@ -179,6 +183,7 @@ class OpenAIRealtimeClient:
                     transcript = str(getattr(event, "transcript", "") or "").strip()
                     if transcript:
                         _LOGGER.debug("User transcript: %s", transcript)
+                        await self._on_user_transcript(transcript)
                     continue
 
                 if event_type == "conversation.item.done":
@@ -186,6 +191,7 @@ class OpenAIRealtimeClient:
                     if transcript:
                         self._latest_assistant_transcript = transcript
                         _LOGGER.debug("Assistant transcript: %s", transcript)
+                        await self._on_assistant_transcript(transcript)
                     continue
 
                 if event_type == "response.function_call_arguments.done":
@@ -198,10 +204,11 @@ class OpenAIRealtimeClient:
                     status = str(getattr(response, "status", "unknown") or "unknown")
                     usage = _summarize_usage(getattr(response, "usage", None))
                     transcript = self._latest_assistant_transcript
+                    model = str(getattr(response, "model", "") or self._model)
                     self._discarded_response_ids.discard(response_id)
                     if response_id == self._current_response_id:
                         self._current_response_id = None
-                    await self._on_response_done(response_id, status, usage, transcript)
+                    await self._on_response_done(response_id, status, usage, transcript, model)
                     continue
 
                 if event_type == "error":
@@ -217,12 +224,12 @@ class OpenAIRealtimeClient:
 
     async def _handle_tool_call(self, event: Any) -> None:
         tool_name = str(getattr(event, "name", "unknown"))
-        await self._on_tool_call_started(tool_name)
         try:
             arguments = json.loads(getattr(event, "arguments", "{}") or "{}")
         except json.JSONDecodeError:
             arguments = {}
 
+        await self._on_tool_call_started(tool_name, arguments)
         _LOGGER.debug("Realtime function call: %s args=%s", tool_name, arguments)
 
         if tool_name == "end_session":
@@ -244,7 +251,7 @@ class OpenAIRealtimeClient:
             }
         )
         await self._connection.send({"type": "response.create"})
-        await self._on_tool_call_finished(tool_name)
+        await self._on_tool_call_finished(tool_name, result)
 
     def _build_session_config(self) -> dict[str, Any]:
         return {

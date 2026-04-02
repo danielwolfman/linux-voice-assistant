@@ -7,6 +7,12 @@ apply_settings:
       selector:
         text:
           type: password
+    openai_admin_api_key:
+      name: OpenAI Admin API Key
+      description: Used for OpenAI organization usage polling for cost and token totals.
+      selector:
+        text:
+          type: password
     openai_model:
       name: OpenAI Model
       selector:
@@ -97,6 +103,10 @@ refresh_openai_catalog:
   name: Refresh OpenAI Catalog
   description: Refresh the available OpenAI Realtime model list used by the Realtime Satellite selectors.
 
+refresh_openai_usage:
+  name: Refresh OpenAI Usage
+  description: Refresh cost and token totals from the OpenAI organization usage API using the stored admin API key.
+
 record_activity:
   name: Record Activity
   description: Record a satellite activity item into Home Assistant activity history.
@@ -113,40 +123,3 @@ record_activity:
       name: Details
       selector:
         object:
-
-record_usage:
-  name: Record Usage
-  description: Record a satellite usage sample into Home Assistant cost and token totals.
-  fields:
-    model:
-      name: Model
-      selector:
-        text:
-    input_tokens:
-      name: Input Tokens
-      selector:
-        number:
-          min: 0
-          max: 1000000
-          step: 1
-    output_tokens:
-      name: Output Tokens
-      selector:
-        number:
-          min: 0
-          max: 1000000
-          step: 1
-    total_tokens:
-      name: Total Tokens
-      selector:
-        number:
-          min: 0
-          max: 1000000
-          step: 1
-    cost_usd:
-      name: Cost USD
-      selector:
-        number:
-          min: 0
-          max: 100
-          step: 0.000001

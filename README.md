@@ -1,8 +1,10 @@
-# Linux-Voice-Assistant Realtime Fork
+# OpenAI Real Time Assistant Linux Fork
+
+![OpenAI Real Time Assistant](assets/openai-real-time-assistant.png)
 
 [![CI](https://github.com/OHF-Voice/linux-voice-assistant/actions/workflows/docker-build-release.yml/badge.svg)](https://github.com/OHF-Voice/linux-voice-assistant/actions/workflows/docker-build-release.yml) [![GitHub Package Version](https://img.shields.io/github/v/tag/OHF-Voice/linux-voice-assistant?label=version)](https://github.com/OHF-Voice/linux-voice-assistant/pkgs/container/linux-voice-assistant) [![GitHub License](https://img.shields.io/github/license/OHF-Voice/linux-voice-assistant)](https://github.com/OHF-Voice/linux-voice-assistant/blob/main/LICENSE.md) [![GitHub last commit](https://img.shields.io/github/last-commit/OHF-Voice/linux-voice-assistant)](https://github.com/OHF-Voice/linux-voice-assistant/commits) [![GitHub Container Registry](https://img.shields.io/badge/Container%20Registry-GHCR-blue)](https://github.com/OHF-Voice/linux-voice-assistant/pkgs/container/linux-voice-assistant)
 
-This fork turns the upstream Linux voice assistant into a Linux-native OpenAI Realtime satellite for Home Assistant.
+This fork turns `OHF-Voice/linux-voice-assistant` into a Linux-native OpenAI Realtime voice assistant for Home Assistant.
 
 The active voice path is:
 
@@ -13,7 +15,21 @@ The active voice path is:
 
 Home Assistant Assist STT, conversation, and TTS are not used during the live session.
 
-## Realtime Linux Prototype
+## How This Fork Differs
+
+Compared to upstream, this fork changes the project from an Assist/ESPHome-oriented satellite into a direct OpenAI Realtime speech-to-speech assistant.
+
+Major differences:
+
+- No Home Assistant Assist STT/conversation/TTS in the live voice path
+- Local Linux wake-word detection remains on-device
+- Mic audio streams directly to OpenAI Realtime
+- Assistant audio streams directly back from OpenAI Realtime
+- Home Assistant is used as a tool backend, not as the live conversation engine
+- Home Assistant integration provides runtime settings, activity visibility, model/voice selection, and tool toggles
+- Docker runtime is included for long-running Linux deployment
+
+## Current Architecture
 
 This fork keeps the local wake-word and Linux audio parts from `OHF-Voice/linux-voice-assistant`, but replaces the live Assist/ESPHome conversation path with:
 
@@ -103,12 +119,41 @@ Notes:
 - Preferences are stored at `/app/local/preferences.json` inside the container, which maps to `./local/preferences.json` on the host.
 - The container uses host networking and the host PulseAudio/PipeWire runtime directory for microphone and speaker access.
 
+## Current Features
+
+- local wake word on Linux
+- direct OpenAI Realtime speech-to-speech conversation
+- Home Assistant tool bridge for smart-home control and state
+- OpenAI error fallback speech per voice
+- Home Assistant integration for runtime config updates
+- activity logging into Home Assistant
+- OpenAI usage/cost polling for last 1 hour and last 24 hours
+- per-tool enable/disable controls
+- optional Docker deployment
+
 ## Current Tool Surface
 
 - `get_entities(query, area, domain, limit)`
 - `get_state(entity_id)`
 - `call_service(domain, service, target, data)`
 - `web_search(query, max_results)`
+
+## Home Assistant Integration
+
+The Home Assistant custom integration is named `OpenAI Real Time Assistant`.
+
+It provides:
+
+- live runtime configuration from Home Assistant UI
+- model and voice selectors
+- sound path and timing configuration
+- tool enable/disable toggles
+- Home Assistant activity log entries for:
+  - user transcripts
+  - assistant transcripts
+  - tool calls
+  - realtime errors
+- cost and token sensors sourced from OpenAI organization usage data
 
 ## Validation Targets
 

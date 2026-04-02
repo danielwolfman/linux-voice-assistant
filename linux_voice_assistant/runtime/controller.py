@@ -12,6 +12,7 @@ from typing import Optional, cast
 import numpy as np
 
 from ..config import AppConfig
+from ..ha_tools.activity_logger import HomeAssistantActivityLogger
 from ..ha_tools.client import HomeAssistantToolBridge
 from ..ha_tools.settings_listener import HomeAssistantSettingsListener
 from ..models import ServerState
@@ -58,6 +59,7 @@ class SessionController:
         self._response_delay_task: Optional[asyncio.Task[None]] = None
         self._wakeup_sound_task: Optional[asyncio.Task[None]] = None
         self._ha_tool_bridge = HomeAssistantToolBridge(config.ha_url, config.ha_token, verify_ssl=config.ha_verify_ssl)
+        self._activity_logger = HomeAssistantActivityLogger(config.ha_url, config.ha_token, verify_ssl=config.ha_verify_ssl)
         self._tool_registry = ToolRegistry(self._ha_tool_bridge, WebSearchTool())
         self._tool_registry.set_enabled_tools(_enabled_tools_from_config(config))
         from ..audio.realtime_player import RealtimeAudioPlayer
@@ -82,6 +84,8 @@ class SessionController:
             on_audio_delta=self._on_audio_delta,
             on_response_created=self._on_response_created,
             on_response_done=self._on_response_done,
+            on_user_transcript=self._on_user_transcript,
+            on_assistant_transcript=self._on_assistant_transcript,
             on_tool_call_started=self._on_tool_call_started,
             on_tool_call_finished=self._on_tool_call_finished,
             on_end_session_requested=self._on_end_session_requested,
@@ -149,6 +153,7 @@ class SessionController:
         self._audio_player.close()
         await self._settings_listener.close()
         await self._realtime.close()
+        await self._activity_logger.close()
         await self._tool_registry.close()
 
     async def _apply_remote_settings(self, settings: dict[str, object]) -> None:
@@ -255,11 +260,11 @@ class SessionController:
     async def _on_response_created(self, response_id: str) -> None:
         _LOGGER.debug("Realtime response started: %s", response_id)
 
-    async def _on_response_done(self, response_id: str, status: str, usage: dict[str, int], transcript: str) -> None:
+    async def _on_response_done(self, response_id: str, status: str, usage: dict[str, int], transcript: str, model: str) -> None:
         _LOGGER.debug("Realtime response finished: %s (%s)", response_id, status)
         if transcript:
             _LOGGER.debug("Realtime final assistant transcript: %s", transcript)
-        _LOGGER.debug("Realtime usage: %s", _format_usage_summary(self.config.openai_model, usage))
+        _LOGGER.debug("Realtime usage: %s", _format_usage_summary(model, usage))
         if self.phase == SessionPhase.TOOL_CALL:
             _LOGGER.debug("Ignoring intermediate response.done while awaiting additional tool or final answer")
             return
@@ -272,15 +277,17 @@ class SessionController:
         else:
             self._response_delay_task = asyncio.create_task(self._return_to_follow_up_listening())
 
-    async def _on_tool_call_started(self, tool_name: str) -> None:
+    async def _on_tool_call_started(self, tool_name: str, arguments: dict[str, object]) -> None:
         _LOGGER.debug("Executing Home Assistant tool: %s", tool_name)
+        await self._activity_logger.record_activity("tool_call", f"Started {tool_name} input={_compact_log_value(arguments)}")
         self._tool_call_depth += 1
         self._tool_called_in_response_chain = True
         self._start_tool_sound()
         self._set_phase(SessionPhase.TOOL_CALL)
 
-    async def _on_tool_call_finished(self, tool_name: str) -> None:
+    async def _on_tool_call_finished(self, tool_name: str, result: dict[str, object]) -> None:
         _LOGGER.debug("Finished Home Assistant tool: %s", tool_name)
+        await self._activity_logger.record_activity("tool_call", f"Finished {tool_name} output={_compact_log_value(result)}")
         self._tool_call_depth = max(0, self._tool_call_depth - 1)
 
     async def _on_end_session_requested(self, reason: str) -> None:
@@ -294,6 +301,7 @@ class SessionController:
         self._realtime_error_in_progress = True
         try:
             _LOGGER.error("Realtime unavailable (%s): %s", reason, message)
+            await self._activity_logger.record_activity("error", f"Realtime unavailable: {reason}", {"message": message})
             self._reset_response_chain_state()
             self._stop_processing_sound()
             self._stop_tool_sound()
@@ -308,6 +316,12 @@ class SessionController:
             self._set_phase(SessionPhase.IDLE)
         finally:
             self._realtime_error_in_progress = False
+
+    async def _on_user_transcript(self, transcript: str) -> None:
+        await self._activity_logger.record_activity("user", transcript)
+
+    async def _on_assistant_transcript(self, transcript: str) -> None:
+        await self._activity_logger.record_activity("assistant", transcript)
 
     async def _return_to_follow_up_listening(self) -> None:
         await self._wait_for_output_drain()
@@ -490,7 +504,8 @@ def _format_usage_summary(model: str, usage: dict[str, int]) -> str:
 
 
 def _estimate_realtime_cost_usd(model: str, usage: dict[str, int]) -> float:
-    pricing = _REALTIME_PRICING.get(model) or _REALTIME_PRICING.get(_REALTIME_MODEL_ALIASES.get(model, ""))
+    pricing_key = _resolve_pricing_model(model)
+    pricing = _REALTIME_PRICING.get(pricing_key)
     if pricing is None:
         return 0.0
 
@@ -512,6 +527,7 @@ def _estimate_realtime_cost_usd(model: str, usage: dict[str, int]) -> float:
 
 _REALTIME_MODEL_ALIASES = {
     "gpt-realtime": "gpt-realtime-1.5",
+    "gpt-4o-realtime-preview": "gpt-realtime-1.5",
 }
 
 _REALTIME_PRICING = {
@@ -541,3 +557,22 @@ def _enabled_tools_from_config(config: AppConfig) -> dict[str, bool]:
         "call_service": config.enable_tool_call_service,
         "web_search": config.enable_tool_web_search,
     }
+
+
+def _compact_log_value(value: object, limit: int = 100) -> str:
+    text = str(value).replace("\n", " ").strip()
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _resolve_pricing_model(model: str) -> str:
+    if model in _REALTIME_PRICING:
+        return model
+    if model in _REALTIME_MODEL_ALIASES:
+        return _REALTIME_MODEL_ALIASES[model]
+    if model.startswith("gpt-realtime-mini"):
+        return "gpt-realtime-mini"
+    if model.startswith("gpt-realtime"):
+        return "gpt-realtime-1.5"
+    if model.startswith("gpt-4o-realtime-preview"):
+        return "gpt-realtime-1.5"
+    return model
