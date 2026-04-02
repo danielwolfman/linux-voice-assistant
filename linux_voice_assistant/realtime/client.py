@@ -33,6 +33,7 @@ class OpenAIRealtimeClient:
         on_tool_call_started: Callable[[str], Awaitable[None]],
         on_tool_call_finished: Callable[[str], Awaitable[None]],
         on_end_session_requested: Callable[[str], Awaitable[None]],
+        on_error: Callable[[str, str], Awaitable[None]],
     ) -> None:
         self._client = AsyncOpenAI(api_key=api_key, base_url=api_base)
         self._model = model
@@ -45,6 +46,7 @@ class OpenAIRealtimeClient:
         self._on_tool_call_started = on_tool_call_started
         self._on_tool_call_finished = on_tool_call_finished
         self._on_end_session_requested = on_end_session_requested
+        self._on_error = on_error
         self._connection: Optional[Any] = None
         self._connection_context: Optional[Any] = None
         self._reader_task: Optional[asyncio.Task[None]] = None
@@ -56,58 +58,67 @@ class OpenAIRealtimeClient:
         if self._connection is not None:
             return
 
-        self._connection_context = self._client.realtime.connect(model=self._model)
-        self._connection = await self._connection_context.__aenter__()
-        session_config: Any = {
-            "type": "realtime",
-            "model": self._model,
-            "instructions": self._instructions,
-            "output_modalities": ["audio"],
-            "audio": {
-                "output": {
-                    "voice": self._voice,
-                    "format": {"type": "audio/pcm", "rate": 24000},
-                },
-                "input": {
-                    "format": {"type": "audio/pcm", "rate": 24000},
-                    "transcription": {"model": "gpt-4o-mini-transcribe"},
-                    "turn_detection": None,
-                },
-            },
-            "tools": self._tools.tool_definitions() + [_end_session_tool_definition()],
-            "tool_choice": "auto",
-        }
-        await self._connection.session.update(session=session_config)
-        self._reader_task = asyncio.create_task(self._read_events())
+        try:
+            self._connection_context = self._client.realtime.connect(model=self._model)
+            self._connection = await self._connection_context.__aenter__()
+            session_config: Any = self._build_session_config()
+            await self._connection.session.update(session=session_config)
+            self._reader_task = asyncio.create_task(self._read_events())
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            await self._notify_error(err)
+            await self.close()
+            raise
 
     async def append_input_audio(self, audio_chunk: bytes) -> None:
-        await self.connect()
-        assert self._connection is not None
-        realtime_chunk = resample_pcm16_mono(audio_chunk, source_rate=16000, target_rate=24000)
-        await self._connection.send(
-            {
-                "type": "input_audio_buffer.append",
-                "audio": base64.b64encode(realtime_chunk).decode("utf-8"),
-            }
-        )
+        try:
+            await self.connect()
+            assert self._connection is not None
+            realtime_chunk = resample_pcm16_mono(audio_chunk, source_rate=16000, target_rate=24000)
+            await self._connection.send(
+                {
+                    "type": "input_audio_buffer.append",
+                    "audio": base64.b64encode(realtime_chunk).decode("utf-8"),
+                }
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            await self._notify_error(err)
 
     async def commit_turn(self) -> None:
-        if self._connection is None:
-            return
-        await self._connection.send({"type": "input_audio_buffer.commit"})
-        await self._connection.send({"type": "response.create"})
+        try:
+            if self._connection is None:
+                return
+            await self._connection.send({"type": "input_audio_buffer.commit"})
+            await self._connection.send({"type": "response.create"})
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            await self._notify_error(err)
 
     async def clear_input_audio(self) -> None:
-        if self._connection is None:
-            return
-        await self._connection.send({"type": "input_audio_buffer.clear"})
+        try:
+            if self._connection is None:
+                return
+            await self._connection.send({"type": "input_audio_buffer.clear"})
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            await self._notify_error(err)
 
     async def cancel_response(self) -> None:
-        if self._connection is None:
-            return
-        if self._current_response_id:
-            self._discarded_response_ids.add(self._current_response_id)
-        await self._connection.send({"type": "response.cancel"})
+        try:
+            if self._connection is None:
+                return
+            if self._current_response_id:
+                self._discarded_response_ids.add(self._current_response_id)
+            await self._connection.send({"type": "response.cancel"})
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            await self._notify_error(err)
 
     async def close(self) -> None:
         if self._reader_task is not None:
@@ -124,6 +135,19 @@ class OpenAIRealtimeClient:
         self._connection_context = None
         self._current_response_id = None
         self._discarded_response_ids.clear()
+
+    async def update_session_settings(self, *, model: Optional[str] = None, voice: Optional[str] = None, instructions: Optional[str] = None) -> None:
+        if model is not None:
+            self._model = model
+        if voice is not None:
+            self._voice = voice
+        if instructions is not None:
+            self._instructions = instructions
+        if self._connection is None:
+            return
+
+        session_config: Any = self._build_session_config()
+        await self._connection.session.update(session=session_config)
 
     async def _read_events(self) -> None:
         assert self._connection is not None
@@ -176,11 +200,15 @@ class OpenAIRealtimeClient:
                     continue
 
                 if event_type == "error":
-                    _LOGGER.error("Realtime error: %s", event)
+                    reason, message = classify_realtime_error(event)
+                    _LOGGER.error("Realtime error (%s): %s", reason, message)
+                    await self._on_error(reason, message)
         except asyncio.CancelledError:
             raise
         except Exception:
             _LOGGER.exception("Realtime event reader crashed")
+            reason, message = classify_realtime_error("Realtime event reader crashed")
+            await self._on_error(reason, message)
 
     async def _handle_tool_call(self, event: Any) -> None:
         tool_name = str(getattr(event, "name", "unknown"))
@@ -212,6 +240,32 @@ class OpenAIRealtimeClient:
         )
         await self._connection.send({"type": "response.create"})
         await self._on_tool_call_finished(tool_name)
+
+    def _build_session_config(self) -> dict[str, Any]:
+        return {
+            "type": "realtime",
+            "model": self._model,
+            "instructions": self._instructions,
+            "output_modalities": ["audio"],
+            "audio": {
+                "output": {
+                    "voice": self._voice,
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                },
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "transcription": {"model": "gpt-4o-mini-transcribe"},
+                    "turn_detection": None,
+                },
+            },
+            "tools": self._tools.tool_definitions() + [_end_session_tool_definition()],
+            "tool_choice": "auto",
+        }
+
+    async def _notify_error(self, error: Any) -> None:
+        reason, message = classify_realtime_error(error)
+        _LOGGER.error("Realtime failure (%s): %s", reason, message)
+        await self._on_error(reason, message)
 
 
 def _summarize_usage(usage: Any) -> dict[str, int]:
@@ -296,6 +350,27 @@ def _extract_assistant_transcript(item: Any) -> str:
             if text:
                 transcripts.append(text)
     return " ".join(transcripts).strip()
+
+
+def classify_realtime_error(error: Any) -> tuple[str, str]:
+    message = _extract_error_message(error)
+    normalized = message.lower()
+
+    if any(token in normalized for token in ["insufficient_quota", "quota", "billing", "payment", "credit balance"]):
+        return "quota_billing", message
+    if any(token in normalized for token in ["invalid_api_key", "api key", "authentication", "unauthorized", "401"]):
+        return "authentication", message
+    if any(token in normalized for token in ["rate_limit", "unavailable", "overloaded", "server_error", "timeout", "connection", "connect", "502", "503", "504"]):
+        return "service_unavailable", message
+    return "generic", message
+
+
+def _extract_error_message(error: Any) -> str:
+    nested_error = _lookup(error, "error")
+    message = _lookup(nested_error, "message") or _lookup(error, "message")
+    code = _lookup(nested_error, "code") or _lookup(error, "code")
+    pieces = [str(part).strip() for part in [code, message or str(error)] if str(part).strip()]
+    return ": ".join(pieces)
 
 
 def resample_pcm16_mono(audio_chunk: bytes, source_rate: int, target_rate: int) -> bytes:

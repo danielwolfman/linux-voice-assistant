@@ -7,12 +7,13 @@ import logging
 import time
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 import numpy as np
 
 from ..config import AppConfig
 from ..ha_tools.client import HomeAssistantToolBridge
+from ..ha_tools.settings_listener import HomeAssistantSettingsListener
 from ..models import ServerState
 from ..realtime.client import OpenAIRealtimeClient
 from ..mpv_player import MpvMediaPlayer
@@ -47,6 +48,8 @@ class SessionController:
         self._last_voice_at: Optional[float] = None
         self._processing_sound_active = False
         self._tool_sound_active = False
+        self._error_sound_active = False
+        self._realtime_error_in_progress = False
         self._tool_call_depth = 0
         self._tool_called_in_response_chain = False
         self._end_session_requested = False
@@ -59,6 +62,12 @@ class SessionController:
         self._audio_player.set_volume(state.volume)
         self._tool_sound_player = MpvMediaPlayer()
         self._tool_sound_player.set_volume(int(round(state.volume * 100)))
+        self._settings_listener = HomeAssistantSettingsListener(
+            base_url=config.ha_url,
+            token=config.ha_token,
+            verify_ssl=config.ha_verify_ssl,
+            on_update=self._apply_remote_settings,
+        )
         self._realtime = OpenAIRealtimeClient(
             api_key=config.openai_api_key,
             model=config.openai_model,
@@ -72,7 +81,11 @@ class SessionController:
             on_tool_call_started=self._on_tool_call_started,
             on_tool_call_finished=self._on_tool_call_finished,
             on_end_session_requested=self._on_end_session_requested,
+            on_error=self._on_realtime_error,
         )
+
+    async def start(self) -> None:
+        await self._settings_listener.start()
 
     def handle_audio(self, audio_chunk: bytes) -> None:
         now = time.monotonic()
@@ -120,7 +133,7 @@ class SessionController:
         self._schedule(self._interrupt_and_listen())
 
     def is_microphone_blocked(self) -> bool:
-        return self.state.muted or (time.monotonic() < self._mic_suppressed_until) or self.phase in {SessionPhase.PLAYING_OUTPUT, SessionPhase.TOOL_CALL} or self._audio_player.is_playing
+        return self.state.muted or self._error_sound_active or (time.monotonic() < self._mic_suppressed_until) or self.phase in {SessionPhase.PLAYING_OUTPUT, SessionPhase.TOOL_CALL} or self._audio_player.is_playing
 
     async def shutdown(self) -> None:
         if self._response_delay_task is not None:
@@ -130,8 +143,39 @@ class SessionController:
         self._reset_response_chain_state()
         self._stop_tool_sound()
         self._audio_player.close()
+        await self._settings_listener.close()
         await self._realtime.close()
         await self._tool_bridge.close()
+
+    async def _apply_remote_settings(self, settings: dict[str, object]) -> None:
+        changed_keys: list[str] = []
+        new_model: Optional[str] = None
+        new_voice: Optional[str] = None
+        new_instructions: Optional[str] = None
+
+        for key, value in settings.items():
+            if not hasattr(self.config, key):
+                continue
+            current_value = getattr(self.config, key)
+            if current_value == value:
+                continue
+            object.__setattr__(self.config, key, value)
+            changed_keys.append(key)
+            if key == "refractory_seconds":
+                self.state.refractory_seconds = float(cast(float, value))
+            elif key == "openai_model":
+                new_model = str(value)
+            elif key == "openai_voice":
+                new_voice = str(value)
+            elif key == "openai_instructions":
+                new_instructions = str(value)
+
+        if not changed_keys:
+            return
+
+        _LOGGER.info("Applied Home Assistant settings update: %s", ", ".join(changed_keys))
+        if new_model is not None or new_voice is not None or new_instructions is not None:
+            await self._realtime.update_session_settings(model=new_model, voice=new_voice, instructions=new_instructions)
 
     async def _handle_wakeup(self, wake_word_phrase: str) -> None:
         if self.state.muted:
@@ -145,7 +189,10 @@ class SessionController:
             await self._reset_turn(clear_remote_buffer=True)
             return
 
-        await self._realtime.connect()
+        try:
+            await self._realtime.connect()
+        except Exception:
+            return
         self._set_phase(SessionPhase.WAKE_DETECTED)
         self.state.active_wake_words.add(self.state.stop_word.id)
         if self.config.wakeup_sound and Path(self.config.wakeup_sound).exists():
@@ -231,6 +278,28 @@ class SessionController:
         _LOGGER.debug("Session end requested by model: %s", reason)
         self._end_session_requested = True
 
+    async def _on_realtime_error(self, reason: str, message: str) -> None:
+        if self._realtime_error_in_progress:
+            return
+
+        self._realtime_error_in_progress = True
+        try:
+            _LOGGER.error("Realtime unavailable (%s): %s", reason, message)
+            self._reset_response_chain_state()
+            self._stop_processing_sound()
+            self._stop_tool_sound()
+            self._audio_player.stop()
+            self.state.tts_player.stop()
+            await self._realtime.close()
+            await self._reset_turn(clear_remote_buffer=False)
+            self.state.active_wake_words.discard(self.state.stop_word.id)
+            self._session_deadline = None
+            self._set_phase(SessionPhase.BACK_TO_IDLE)
+            self._play_realtime_error_sound(reason)
+            self._set_phase(SessionPhase.IDLE)
+        finally:
+            self._realtime_error_in_progress = False
+
     async def _return_to_follow_up_listening(self) -> None:
         await self._wait_for_output_drain()
         self._mic_suppressed_until = max(self._mic_suppressed_until, time.monotonic() + self._follow_up_mic_holdoff_seconds)
@@ -313,6 +382,18 @@ class SessionController:
         self._mic_suppressed_until = max(self._mic_suppressed_until, time.monotonic() + 0.4)
         self.state.tts_player.play(self.config.session_end_sound)
 
+    def _play_realtime_error_sound(self, reason: str) -> None:
+        error_sound = _realtime_error_sound_path(self.config.openai_voice, reason)
+        if error_sound is None:
+            _LOGGER.warning("No realtime error sound found for voice=%s reason=%s", self.config.openai_voice, reason)
+            return
+        self._error_sound_active = True
+        self._mic_suppressed_until = max(self._mic_suppressed_until, time.monotonic() + 6.0)
+        self.state.tts_player.play(str(error_sound), done_callback=self._on_realtime_error_sound_finished)
+
+    def _on_realtime_error_sound_finished(self) -> None:
+        self._error_sound_active = False
+
     def _reset_response_chain_state(self) -> None:
         self._tool_call_depth = 0
         self._tool_called_in_response_chain = False
@@ -375,6 +456,16 @@ def _looks_like_question(transcript: str) -> bool:
     return stripped.endswith("?") or stripped.endswith("؟")
 
 
+def _realtime_error_sound_path(voice: str, reason: str) -> Optional[Path]:
+    base_dir = Path(__file__).resolve().parents[2] / "sounds" / "openai_errors"
+    selected_voice = voice if voice in _SUPPORTED_ERROR_VOICES else "marin"
+    candidate = base_dir / selected_voice / f"{reason}.mp3"
+    if candidate.exists():
+        return candidate
+    fallback = base_dir / "marin" / "generic.mp3"
+    return fallback if fallback.exists() else None
+
+
 def _format_usage_summary(model: str, usage: dict[str, int]) -> str:
     if not usage:
         return "usage unavailable"
@@ -430,3 +521,5 @@ _REALTIME_PRICING = {
         "text_output": 2.40,
     },
 }
+
+_SUPPORTED_ERROR_VOICES = {"alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"}

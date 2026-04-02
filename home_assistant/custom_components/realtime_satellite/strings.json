@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Realtime Satellite",
+        "description": "Add the Linux Realtime satellite settings integration."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only a single Realtime Satellite integration is supported."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Realtime Satellite Settings",
+        "description": "Change the Linux assistant runtime settings."
+      }
+    }
+  }
+}

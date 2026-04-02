@@ -111,6 +111,7 @@ async def main() -> None:
 
     loop = asyncio.get_running_loop()
     controller = SessionController(state=state, config=config, loop=loop)
+    await controller.start()
     state.satellite = controller
 
     process_audio_thread = threading.Thread(

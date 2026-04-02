@@ -1,6 +1,6 @@
 import numpy as np
 
-from linux_voice_assistant.realtime.client import _extract_assistant_transcript, resample_pcm16_mono
+from linux_voice_assistant.realtime.client import _extract_assistant_transcript, classify_realtime_error, resample_pcm16_mono
 from linux_voice_assistant.runtime.controller import _estimate_realtime_cost_usd, _looks_like_question, pcm16_rms
 
 
@@ -52,3 +52,9 @@ def test_looks_like_question_detects_question_mark():
     assert _looks_like_question("Do you want me to turn it off?")
     assert _looks_like_question("האם לכבות את האור?")
     assert not _looks_like_question("I turned it off.")
+
+
+def test_classify_realtime_error_detects_quota_and_auth():
+    assert classify_realtime_error("insufficient_quota: no credits left")[0] == "quota_billing"
+    assert classify_realtime_error("invalid_api_key: unauthorized")[0] == "authentication"
+    assert classify_realtime_error("service unavailable")[0] == "service_unavailable"

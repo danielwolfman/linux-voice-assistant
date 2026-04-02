@@ -1,0 +1,10 @@
+{
+  "domain": "realtime_satellite",
+  "name": "Realtime Satellite",
+  "version": "0.1.0",
+  "config_flow": true,
+  "documentation": "https://github.com/danielwolfman/linux-voice-assistant",
+  "issue_tracker": "https://github.com/danielwolfman/linux-voice-assistant/issues",
+  "iot_class": "local_push",
+  "codeowners": ["@danielwolfman"]
+}
