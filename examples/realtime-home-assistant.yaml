@@ -1,0 +1,46 @@
+device:
+  name: Berta
+  preferences_file: preferences.json
+
+audio:
+  input_device:
+  output_device:
+  input_block_size: 1024
+  wakeup_sound: sounds/wake_word_triggered.flac
+  processing_sound: sounds/processing.wav
+  tool_call_sound: sounds/mute_switch_off.flac
+  session_end_sound: sounds/mute_switch_on.flac
+  wake_word_dirs:
+    - wakewords
+
+wakeword:
+  model: okay_nabu
+  stop_model: stop
+  download_dir: local
+  refractory_seconds: 2.0
+
+openai:
+  model: gpt-realtime
+  voice: marin
+  instructions: >-
+    You are Berta, a Linux voice satellite for Home Assistant.
+    Keep spoken replies short and use Home Assistant tools for smart-home state and control.
+    For natural-language device requests, first search broadly with get_entities using query and domain.
+    Use the area parameter only when you are confident it matches the exact Home Assistant area name.
+    If a search returns no matches, retry with alternate wording or a likely Home Assistant naming language.
+    Do not keep searching indefinitely: after two failed searches, do at most one likely English or Home Assistant naming retry, then ask a short follow-up.
+    When get_entities returns a plausible actionable entity, stop searching and use its suggested_service_domain and suggested_services to choose a call_service action.
+    If a script or scene clearly matches the request, prefer calling it rather than searching for a lower-level player or device.
+    If the user indicates the conversation is over or asks you to stop listening, call end_session.
+
+home_assistant:
+  url: http://homeassistant.local:8123
+  token: your-long-lived-access-token
+  verify_ssl: false
+
+runtime:
+  session_timeout_seconds: 20
+  vad_threshold: 0.005
+  min_speech_seconds: 0.2
+  end_silence_seconds: 0.8
+  follow_up_after_tool_call: false

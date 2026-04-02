@@ -1,10 +1,87 @@
-# Linux-Voice-Assistant
+# Linux-Voice-Assistant Realtime Fork
 
 [![CI](https://github.com/OHF-Voice/linux-voice-assistant/actions/workflows/docker-build-release.yml/badge.svg)](https://github.com/OHF-Voice/linux-voice-assistant/actions/workflows/docker-build-release.yml) [![GitHub Package Version](https://img.shields.io/github/v/tag/OHF-Voice/linux-voice-assistant?label=version)](https://github.com/OHF-Voice/linux-voice-assistant/pkgs/container/linux-voice-assistant) [![GitHub License](https://img.shields.io/github/license/OHF-Voice/linux-voice-assistant)](https://github.com/OHF-Voice/linux-voice-assistant/blob/main/LICENSE.md) [![GitHub last commit](https://img.shields.io/github/last-commit/OHF-Voice/linux-voice-assistant)](https://github.com/OHF-Voice/linux-voice-assistant/commits) [![GitHub Container Registry](https://img.shields.io/badge/Container%20Registry-GHCR-blue)](https://github.com/OHF-Voice/linux-voice-assistant/pkgs/container/linux-voice-assistant)
 
-An experimental Linux-Voice-Assistant software for [Home Assistant](https://www.home-assistant.io/) remote voice control and interaction.
+This fork turns the upstream Linux voice assistant into a Linux-native OpenAI Realtime satellite for Home Assistant.
 
-This project enables you to build a Linux-based voice assistant designed to use [Assist](https://www.home-assistant.io/voice_control/) for Home Assistant. It allows you to create your own smart speaker that runs on any x64 or ARM64 hardware capable of handling local audio processing (using PulseAudio).
+The active voice path is:
+
+- local wake word on Linux
+- microphone audio streamed directly to OpenAI Realtime
+- response audio streamed directly back from OpenAI Realtime
+- Home Assistant used only as a tool backend for device state and service calls
+
+Home Assistant Assist STT, conversation, and TTS are not used during the live session.
+
+## Realtime Linux Prototype
+
+This fork keeps the local wake-word and Linux audio parts from `OHF-Voice/linux-voice-assistant`, but replaces the live Assist/ESPHome conversation path with:
+
+- `OpenAI Realtime` for speech-to-speech conversation
+- `Home Assistant tool bridge` for state lookup and service execution
+- `Linux runtime state machine` for wake, listen, respond, interrupt, and timeout handling
+
+See `docs/realtime_satellite.md` for the architecture note.
+
+## Quick Start
+
+1. Install system packages:
+
+```sh
+sudo apt-get install -y libmpv-dev libasound2-dev libportaudio2 python3-venv python3-dev
+```
+
+2. Create a virtualenv and install dependencies:
+
+```sh
+./script/setup --dev
+source .venv/bin/activate
+```
+
+3. Copy config and fill in your secrets:
+
+```sh
+cp .env.example .env
+cp examples/realtime-home-assistant.yaml realtime-home-assistant.yaml
+```
+
+4. Export your secrets or place them in the YAML file:
+
+```sh
+export OPENAI_API_KEY="..."
+export HOME_ASSISTANT_URL="http://homeassistant.local:8123"
+export HOME_ASSISTANT_TOKEN="..."
+```
+
+5. List devices if needed:
+
+```sh
+linux-voice-assistant --list-input-devices
+linux-voice-assistant --list-output-devices
+```
+
+6. Run the realtime satellite:
+
+```sh
+linux-voice-assistant --config realtime-home-assistant.yaml --debug
+```
+
+## Current Tool Surface
+
+- `get_entities(query, area, domain, limit)`
+- `get_state(entity_id)`
+- `call_service(domain, service, target, data)`
+
+## Validation Targets
+
+The intended runtime flow is:
+
+1. Say the local wake word.
+2. Speak directly to OpenAI Realtime.
+3. Hear streamed audio response immediately.
+4. Let the model call Home Assistant tools when home-control context is needed.
+5. Interrupt with the wake word or local stop word.
+6. Fall back to wake-word idle mode after the configured timeout.
 
 Unlike simpler voice satellites that run on microcontrollers with very limited compute power, this setup can perform local wake word detection (OWW/MWW) and process some data on-device. 
 

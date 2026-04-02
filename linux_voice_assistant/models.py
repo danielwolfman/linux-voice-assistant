@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from queue import Queue
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 if TYPE_CHECKING:
     from pymicro_wakeword import MicroWakeWord
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
         ThinkingSoundEntity,
     )
     from .mpv_player import MpvMediaPlayer
-    from .satellite import VoiceSatelliteProtocol
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -88,7 +87,7 @@ class ServerState:
     download_dir: Path
 
     media_player_entity: "Optional[MediaPlayerEntity]" = None
-    satellite: "Optional[VoiceSatelliteProtocol]" = None
+    satellite: Optional[Any] = None
     mute_switch_entity: "Optional[MuteSwitchEntity]" = None
     thinking_sound_entity: "Optional[ThinkingSoundEntity]" = None
     wake_words_changed: bool = False

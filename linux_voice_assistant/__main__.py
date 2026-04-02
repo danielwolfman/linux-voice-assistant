@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-import argparse
+"""Linux-native OpenAI Realtime Home Assistant satellite."""
+
+from __future__ import annotations
+
 import asyncio
-import errno
 import json
 import logging
 import sys
@@ -13,408 +15,191 @@ from typing import Dict, List, Optional, Set, Union
 
 import numpy as np
 import soundcard as sc
+import sounddevice as sd  # type: ignore[import-untyped]
 from getmac import get_mac_address  # type: ignore
 from pymicro_wakeword import MicroWakeWord, MicroWakeWordFeatures
 from pyopen_wakeword import OpenWakeWord, OpenWakeWordFeatures
 
+from .config import AppConfig, load_config
 from .models import AvailableWakeWord, Preferences, ServerState, WakeWordType
 from .mpv_player import MpvMediaPlayer
-from .satellite import VoiceSatelliteProtocol
-from .util import (
-    get_default_interface,
-    get_default_ipv4,
-    get_esphome_version,
-    get_version,
-)
-from .zeroconf import HomeAssistantZeroconf
+from .runtime.controller import SessionController
+from .util import get_default_interface, get_version
 
 _LOGGER = logging.getLogger(__name__)
-_MODULE_DIR = Path(__file__).parent
-_REPO_DIR = _MODULE_DIR.parent
-_WAKEWORDS_DIR = _REPO_DIR / "wakewords"
-_SOUNDS_DIR = _REPO_DIR / "sounds"
-
-
-# -----------------------------------------------------------------------------
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--name",
-        help="Real name for the device",
-    )
-    parser.add_argument(
-        "--audio-input-device",
-        help="Name for the audio input device (see --list-input-devices)",
-    )
-    parser.add_argument(
-        "--list-input-devices",
-        action="store_true",
-        help="List audio input devices and exit",
-    )
-    parser.add_argument(
-        "--audio-input-block-size",
-        type=int,
-        default=1024,
-        # todo
-    )
-    parser.add_argument(
-        "--audio-output-device",
-        help="Name for the audio output device (see --list-output-devices)",
-    )
-    parser.add_argument(
-        "--list-output-devices",
-        action="store_true",
-        help="List audio output devices and exit",
-    )
-    parser.add_argument(
-        "--wake-word-dir",
-        default=[_WAKEWORDS_DIR],
-        action="append",
-        help="Directory with wake word models (.tflite) and configuration (.json)",
-    )
-    parser.add_argument(
-        "--wake-model",
-        default="okay_nabu",
-        help="File name of the first active wake model",
-    )
-    parser.add_argument(
-        "--stop-model",
-        default="stop",
-        help="File name of the stop model",
-    )
-    parser.add_argument(
-        "--download-dir",
-        default=_REPO_DIR / "local",
-        help="Directory to download custom wake word models to",
-    )
-    parser.add_argument(
-        "--refractory-seconds",
-        default=2.0,
-        type=float,
-        help="Seconds before wake word can be activated again",
-    )
-    parser.add_argument(
-        "--wakeup-sound",
-        default=str(_SOUNDS_DIR / "wake_word_triggered.flac"),
-        help="Directory and file name for wake sound (when you say the wake word)",
-    )
-    parser.add_argument(
-        "--timer-finished-sound",
-        default=str(_SOUNDS_DIR / "timer_finished.flac"),
-        help="Directory and file name for timer finished sound",
-    )
-    parser.add_argument(
-        "--processing-sound",
-        default=str(_SOUNDS_DIR / "processing.wav"),
-        help="Short sound to play while assistant is processing (thinking)",
-    )
-    parser.add_argument(
-        "--mute-sound",
-        default=str(_SOUNDS_DIR / "mute_switch_on.flac"),
-        help="Sound to play when muting the assistant",
-    )
-    parser.add_argument(
-        "--unmute-sound",
-        default=str(_SOUNDS_DIR / "mute_switch_off.flac"),
-        help="Sound to play when unmuting the assistant",
-    )
-    parser.add_argument(
-        "--preferences-file",
-        default=_REPO_DIR / "preferences.json",
-        help="Directory and file name for the file where the preferences are stored in JSON format",
-    )
-    parser.add_argument(
-        "--host",
-        help="Optional host IP address to bind to (default: Autodetected by network interface)",  # 0.0.0.0 is IPv4, None is all interfaces
-    )
-    parser.add_argument(
-        "--network-interface",
-        help="Network interface the application will be listening on (default: will be automatically detected by gateway)",
-    )
-    # Note that default port is also set in docker-entrypoint.sh
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=6053,
-        help="Port the application is listenening on (default: 6053)",
-    )
-    parser.add_argument(
-        "--enable-thinking-sound",
-        action="store_true",
-        help="Enable thinking finish sound, when the assistant is done thinking and needed more time to process",
-    )
-    parser.add_argument(
-        "--timer-max-ring-seconds",
-        type=float,
-        default=900.0,  # 15 minutes
-        help="Seconds before a ringing timer auto-stops (default: 900)",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Add this to enable debug logging",
-    )
-    parser.add_argument(
-        "--output-only",
-        action="store_true",
-        help="Enable output only mode",
-    )
-    args = parser.parse_args()
+    config, args = load_config()
 
     if args.list_input_devices:
-        print("Audio Input devices:")
-        print("=" * 13)
+        print("Audio input devices:")
+        print("=" * 19)
         for idx, mic in enumerate(sc.all_microphones()):
-            print(f"[{idx}]", mic.name)
+            print(f"[{idx}] {mic.name}")
         return
 
     if args.list_output_devices:
-        from mpv import MPV
-
-        player = MPV()
         print("Audio output devices:")
-        print("=" * 14)
-
-        for speaker in player.audio_device_list:  # type: ignore
-            print(speaker["name"] + ":", speaker["description"])
+        print("=" * 20)
+        for idx, device in enumerate(sd.query_devices()):
+            if device.get("max_output_channels", 0) > 0:
+                print(f"[{idx}] {device['name']}")
         return
 
-    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
-    _LOGGER.debug(args)
+    logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO)
+    _LOGGER.debug("Loaded config: %s", config)
+    logging.getLogger("openai.resources.realtime.realtime").setLevel(logging.INFO)
+    logging.getLogger("websockets.client").setLevel(logging.INFO)
 
-    # Resolve network interface for mac-address detection
-    if not args.network_interface:
-        print("No network interface specified, try to detect default interface")
-        network_interface = get_default_interface()
-        print(f"Default interface detected: {network_interface}")
-    else:
-        print("Network interface specified")
-        network_interface = args.network_interface
-        print(f"Using network interface: {network_interface}")
-
-    # Resolve ip_address where the application will be listening
-    if not args.host:
-        print("No host (ip-address) specified, try to detect IP-Address")
-        host_ip_address = get_default_ipv4(network_interface)
-        print(f"IP-Address detected: {host_ip_address}")
-    else:
-        print("Host specified")
-        print(f"Using host: {args.host}")
-        host_ip_address = args.host
-
-    # Resolve mac
-    if not (mac_address := get_mac_address(interface=network_interface)):
-        print("No Mac address was found, app stopped.")
-        sys.exit(1)
+    network_interface = get_default_interface() or "unknown"
+    mac_address = get_mac_address(interface=network_interface) or get_mac_address() or "00:00:00:00:00:00"
     mac_address_clean = mac_address.replace(":", "").lower()
 
-    # Resolve name
-    if not args.name:
-        print("No friendly name specified, try to autogenerate name")
-        friendly_name = f"LVA - {mac_address_clean}"
-        print(f"Friendly name autogenerated: {friendly_name}")
-    else:
-        print("Friendly name specified")
-        print(f"Using friendly name: {args.name}")
-        friendly_name = args.name
+    friendly_name = config.name or f"LVA Realtime - {mac_address_clean}"
+    device_name = f"lva-realtime-{mac_address_clean}"
 
-    device_name = f"lva-{mac_address_clean}"
-
-    print(f"Device name: {device_name}")
-
-    # Resolve version
     version = get_version()
-    print(f"Version: {version}")
+    _LOGGER.info("Starting %s (%s)", friendly_name, version)
 
-    # Resolve esphome version
-    esphome_version = get_esphome_version()
-    print(f"ESPHome api version: {esphome_version}")
-
-    # Resolve download dir
-    args.download_dir = Path(args.download_dir)
-    args.download_dir.mkdir(parents=True, exist_ok=True)
-
-    # Resolve microphone
-    if args.audio_input_device is not None:
-        try:
-            args.audio_input_device = int(args.audio_input_device)
-        except ValueError:
-            pass
-
-        mic = sc.get_microphone(args.audio_input_device)
-    else:
-        mic = sc.default_microphone()
-
-    # Load available wake words
-    wake_word_dirs = [Path(ww_dir) for ww_dir in args.wake_word_dir]
-    wake_word_dirs.append(args.download_dir / "external_wake_words")
-    available_wake_words: Dict[str, AvailableWakeWord] = {}
-
-    for wake_word_dir in wake_word_dirs:
-        for model_config_path in wake_word_dir.glob("*.json"):
-            model_id = model_config_path.stem
-            if model_id == args.stop_model:
-                # Don't show stop model as an available wake word
-                continue
-
-            with open(model_config_path, "r", encoding="utf-8") as model_config_file:
-                model_config = json.load(model_config_file)
-                model_type = WakeWordType(model_config["type"])
-                if model_type == WakeWordType.OPEN_WAKE_WORD:
-                    wake_word_path = model_config_path.parent / model_config["model"]
-                else:
-                    wake_word_path = model_config_path
-
-                available_wake_words[model_id] = AvailableWakeWord(
-                    id=model_id,
-                    type=WakeWordType(model_type),
-                    wake_word=model_config["wake_word"],
-                    trained_languages=model_config.get("trained_languages", []),
-                    wake_word_path=wake_word_path,
-                )
-
-    _LOGGER.debug("Available wake words: %s", list(sorted(available_wake_words.keys())))
-
-    # Load preferences
-    preferences_path = Path(args.preferences_file)
-    if preferences_path.exists():
-        _LOGGER.debug("Loading preferences: %s", preferences_path)
-        with open(preferences_path, "r", encoding="utf-8") as preferences_file:
-            preferences_dict = json.load(preferences_file)
-            preferences = Preferences(**preferences_dict)
-    else:
-        preferences = Preferences()
-
-    # Load volume from preferences on startup, and ensure it's between 0.0 and 1.0
+    config.download_dir.mkdir(parents=True, exist_ok=True)
+    preferences_path = config.preferences_file
+    preferences = _load_preferences(preferences_path)
     initial_volume = preferences.volume if preferences.volume is not None else 1.0
     initial_volume = max(0.0, min(1.0, float(initial_volume)))
     preferences.volume = initial_volume
 
-    if args.enable_thinking_sound:
-        preferences.thinking_sound = 1
+    mic = _resolve_microphone(config.audio_input_device)
 
-    # Load wake/stop models
-    active_wake_words: Set[str] = set()
-    wake_models: Dict[str, Union[MicroWakeWord, OpenWakeWord]] = {}
-    if preferences.active_wake_words:
-        # Load preferred models
-        for wake_word_id in preferences.active_wake_words:
-            wake_word = available_wake_words.get(wake_word_id)
-            if wake_word is None:
-                _LOGGER.warning("Unrecognized wake word id: %s", wake_word_id)
-                continue
-
-            _LOGGER.debug("Loading wake model: %s", wake_word_id)
-            wake_models[wake_word_id] = wake_word.load()
-            active_wake_words.add(wake_word_id)
-
-    if not wake_models:
-        # Load default model
-        wake_word_id = args.wake_model
-        wake_word = available_wake_words[wake_word_id]
-
-        _LOGGER.debug("Loading wake model: %s", wake_word_id)
-        wake_models[wake_word_id] = wake_word.load()
-        active_wake_words.add(wake_word_id)
-
-    # TODO: allow openWakeWord for "stop"
-    stop_model: Optional[MicroWakeWord] = None
-    for wake_word_dir in wake_word_dirs:
-        stop_config_path = wake_word_dir / f"{args.stop_model}.json"
-        if not stop_config_path.exists():
-            continue
-
-        _LOGGER.debug("Loading stop model: %s", stop_config_path)
-        stop_model = MicroWakeWord.from_config(stop_config_path)
-        break
-
-    assert stop_model is not None
+    available_wake_words = _load_available_wake_words(config)
+    wake_models, active_wake_words = _load_wake_models(config, preferences, available_wake_words)
+    stop_model = _load_stop_model(config)
 
     state = ServerState(
         name=device_name,
         friendly_name=friendly_name,
         network_interface=network_interface,
         mac_address=mac_address,
-        ip_address=host_ip_address,
+        ip_address="127.0.0.1",
         version=version,
-        esphome_version=esphome_version,
+        esphome_version="realtime",
         audio_queue=Queue(),
         entities=[],
         available_wake_words=available_wake_words,
         wake_words=wake_models,
         active_wake_words=active_wake_words,
         stop_word=stop_model,
-        music_player=MpvMediaPlayer(device=args.audio_output_device),
-        tts_player=MpvMediaPlayer(device=args.audio_output_device),
-        wakeup_sound=args.wakeup_sound,
-        timer_finished_sound=args.timer_finished_sound,
-        processing_sound=args.processing_sound,
-        mute_sound=args.mute_sound,
-        unmute_sound=args.unmute_sound,
+        music_player=MpvMediaPlayer(),
+        tts_player=MpvMediaPlayer(),
+        wakeup_sound=config.wakeup_sound or "",
+        timer_finished_sound="",
+        processing_sound=config.processing_sound or "",
+        mute_sound="",
+        unmute_sound="",
         preferences=preferences,
         preferences_path=preferences_path,
-        refractory_seconds=args.refractory_seconds,
-        output_only=args.output_only,
-        download_dir=args.download_dir,
+        download_dir=config.download_dir,
+        refractory_seconds=config.refractory_seconds,
+        output_only=False,
         volume=initial_volume,
-        timer_max_ring_seconds=args.timer_max_ring_seconds,
+        timer_max_ring_seconds=0.0,
     )
-
-    if args.enable_thinking_sound:
-        state.save_preferences()
 
     initial_volume_percent = int(round(initial_volume * 100))
     state.music_player.set_volume(initial_volume_percent)
     state.tts_player.set_volume(initial_volume_percent)
 
     loop = asyncio.get_running_loop()
-    max_attempts = 15
-    attempt = 1
-    server = None
-
-    while attempt <= max_attempts:
-        try:
-            server = await loop.create_server(lambda: VoiceSatelliteProtocol(state), host=host_ip_address, port=args.port)
-            break  # connect successful, exit the loop
-        except OSError as err:
-            message = err.strerror or str(err)
-            if err.errno == errno.EADDRINUSE:
-                message = "address already in use"
-            if attempt < max_attempts:
-                _LOGGER.warning("Attempt %d/%d failed to bind on address (%s, %s): %s. Retrying in 1 second...", attempt, max_attempts, host_ip_address, args.port, message)
-                await asyncio.sleep(1)
-                attempt += 1
-            else:
-                _LOGGER.exception("All %d attempts failed to bind on address (%s, %s): %s", max_attempts, host_ip_address, args.port, message)
-                sys.exit(1)
+    controller = SessionController(state=state, config=config, loop=loop)
+    state.satellite = controller
 
     process_audio_thread = threading.Thread(
         target=process_audio,
-        args=(state, mic, args.audio_input_block_size),
+        args=(state, mic, config.audio_input_block_size),
         daemon=True,
     )
     process_audio_thread.start()
 
-    # Auto discovery (zeroconf, mDNS)
-    discovery = HomeAssistantZeroconf(port=args.port, name=state.name, mac_address=state.mac_address, host_ip_address=host_ip_address)
-    await discovery.register_server()
-
     try:
-        async with server:  # type: ignore
-            _LOGGER.info("Server started (host=%s, port=%s)", host_ip_address, args.port)
-            await server.serve_forever()  # type: ignore
+        await asyncio.Event().wait()
     except KeyboardInterrupt:
         pass
     finally:
         state.audio_queue.put_nowait(None)
+        await controller.shutdown()
         process_audio_thread.join()
 
-    _LOGGER.debug("Server stopped")
+
+def _resolve_microphone(audio_input_device: Optional[str]):
+    if audio_input_device is None:
+        return sc.default_microphone()
+
+    try:
+        return sc.get_microphone(int(audio_input_device))
+    except ValueError:
+        return sc.get_microphone(audio_input_device)
 
 
-# -----------------------------------------------------------------------------
+def _load_preferences(preferences_path: Path) -> Preferences:
+    if preferences_path.exists():
+        with open(preferences_path, "r", encoding="utf-8") as preferences_file:
+            return Preferences(**json.load(preferences_file))
+    return Preferences()
+
+
+def _load_available_wake_words(config: AppConfig) -> Dict[str, AvailableWakeWord]:
+    wake_word_dirs = list(config.wake_word_dirs)
+    wake_word_dirs.append(config.download_dir / "external_wake_words")
+    available_wake_words: Dict[str, AvailableWakeWord] = {}
+
+    for wake_word_dir in wake_word_dirs:
+        for model_config_path in wake_word_dir.glob("*.json"):
+            model_id = model_config_path.stem
+            if model_id == config.stop_model:
+                continue
+
+            with open(model_config_path, "r", encoding="utf-8") as model_config_file:
+                model_config = json.load(model_config_file)
+                model_type = WakeWordType(model_config["type"])
+                wake_word_path = model_config_path.parent / model_config["model"] if model_type == WakeWordType.OPEN_WAKE_WORD else model_config_path
+                available_wake_words[model_id] = AvailableWakeWord(
+                    id=model_id,
+                    type=model_type,
+                    wake_word=model_config["wake_word"],
+                    trained_languages=model_config.get("trained_languages", []),
+                    wake_word_path=wake_word_path,
+                )
+
+    return available_wake_words
+
+
+def _load_wake_models(config: AppConfig, preferences: Preferences, available_wake_words: Dict[str, AvailableWakeWord]) -> tuple[Dict[str, Union[MicroWakeWord, OpenWakeWord]], Set[str]]:
+    active_wake_words: Set[str] = set()
+    wake_models: Dict[str, Union[MicroWakeWord, OpenWakeWord]] = {}
+
+    if preferences.active_wake_words:
+        for wake_word_id in preferences.active_wake_words:
+            wake_word = available_wake_words.get(wake_word_id)
+            if wake_word is None:
+                _LOGGER.warning("Unrecognized wake word id: %s", wake_word_id)
+                continue
+            wake_models[wake_word_id] = wake_word.load()
+            active_wake_words.add(wake_word_id)
+
+    if not wake_models:
+        wake_word = available_wake_words[config.wake_model]
+        wake_models[config.wake_model] = wake_word.load()
+        active_wake_words.add(config.wake_model)
+
+    return wake_models, active_wake_words
+
+
+def _load_stop_model(config: AppConfig) -> MicroWakeWord:
+    for wake_word_dir in list(config.wake_word_dirs) + [config.download_dir / "external_wake_words"]:
+        stop_config_path = wake_word_dir / f"{config.stop_model}.json"
+        if stop_config_path.exists():
+            return MicroWakeWord.from_config(stop_config_path)
+    raise FileNotFoundError(f"Unable to find stop model {config.stop_model}")
 
 
 def process_audio(state: ServerState, mic, block_size: int):
@@ -435,25 +220,23 @@ def process_audio(state: ServerState, mic, block_size: int):
         with mic.recorder(samplerate=16000, channels=1, blocksize=block_size) as mic_in:
             while True:
                 audio_chunk_array = mic_in.record(block_size).reshape(-1)
-                audio_chunk = (np.clip(audio_chunk_array, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()  # little-endian 16-bit signed
+                audio_chunk = (np.clip(audio_chunk_array, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
 
                 if state.satellite is None:
                     continue
 
+                if state.satellite.is_microphone_blocked():
+                    continue
+
                 if (not wake_words) or (state.wake_words_changed and state.wake_words):
-                    # Update list of wake word models to process
                     state.wake_words_changed = False
                     wake_words = [ww for ww in state.wake_words.values() if ww.id in state.active_wake_words]
-
-                    has_oww = False
-                    for wake_word in wake_words:
-                        if isinstance(wake_word, OpenWakeWord):
-                            has_oww = True
+                    has_oww = any(isinstance(wake_word, OpenWakeWord) for wake_word in wake_words)
 
                     if micro_features is None:
                         micro_features = MicroWakeWordFeatures()
 
-                    if has_oww and (oww_features is None):
+                    if has_oww and oww_features is None:
                         oww_features = OpenWakeWordFeatures.from_builtin()
 
                 try:
@@ -481,13 +264,11 @@ def process_audio(state: ServerState, mic, block_size: int):
                                         activated = True
 
                         if activated and not state.muted:
-                            # Check refractory
                             now = time.monotonic()
                             if (last_active is None) or ((now - last_active) > state.refractory_seconds):
                                 state.satellite.wakeup(wake_word)
                                 last_active = now
 
-                    # Always process to keep state correct
                     stopped = False
                     for micro_input in micro_inputs:
                         if state.stop_word.process_streaming(micro_input):
@@ -499,15 +280,14 @@ def process_audio(state: ServerState, mic, block_size: int):
                 except Exception:
                     _LOGGER.exception("Unexpected error handling audio")
     except Exception:
-        _LOGGER.exception("Unexpected error processing audio")
-        sys.exit(1)
+        _LOGGER.exception("Failed to process microphone audio")
 
 
-# -----------------------------------------------------------------------------
-
-
-def run():
-    asyncio.run(main())
+def run() -> None:
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        sys.exit(0)
 
 
 if __name__ == "__main__":
