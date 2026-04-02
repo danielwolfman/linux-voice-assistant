@@ -55,6 +55,10 @@ class AppConfig:
     min_speech_seconds: float
     end_silence_seconds: float
     follow_up_after_tool_call: bool
+    enable_tool_get_entities: bool
+    enable_tool_get_state: bool
+    enable_tool_call_service: bool
+    enable_tool_web_search: bool
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -234,6 +238,10 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
         min_speech_seconds=float(_pick(args.min_speech_seconds, _env_float("LVA_MIN_SPEECH_SECONDS"), _get_float(yaml_config, "runtime.min_speech_seconds"), 0.2)),
         end_silence_seconds=float(_pick(args.end_silence_seconds, _env_float("LVA_END_SILENCE_SECONDS"), _get_float(yaml_config, "runtime.end_silence_seconds"), 0.8)),
         follow_up_after_tool_call=bool(_pick(follow_up_after_tool_call, _env_bool("LVA_FOLLOW_UP_AFTER_TOOL_CALL"), _get_bool(yaml_config, "runtime.follow_up_after_tool_call"), False)),
+        enable_tool_get_entities=bool(_pick(_env_bool("LVA_ENABLE_TOOL_GET_ENTITIES"), _get_bool(yaml_config, "tools.enable_get_entities"), True)),
+        enable_tool_get_state=bool(_pick(_env_bool("LVA_ENABLE_TOOL_GET_STATE"), _get_bool(yaml_config, "tools.enable_get_state"), True)),
+        enable_tool_call_service=bool(_pick(_env_bool("LVA_ENABLE_TOOL_CALL_SERVICE"), _get_bool(yaml_config, "tools.enable_call_service"), True)),
+        enable_tool_web_search=bool(_pick(_env_bool("LVA_ENABLE_TOOL_WEB_SEARCH"), _get_bool(yaml_config, "tools.enable_web_search"), True)),
     )
     return config, args
 

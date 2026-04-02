@@ -35,6 +35,10 @@ def _options_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Optional("end_silence_seconds", default=defaults["end_silence_seconds"]): selector.NumberSelector(selector.NumberSelectorConfig(min=0.1, max=5, step=0.1, mode=selector.NumberSelectorMode.BOX)),
             vol.Optional("refractory_seconds", default=defaults["refractory_seconds"]): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=10, step=0.1, mode=selector.NumberSelectorMode.BOX)),
             vol.Optional("follow_up_after_tool_call", default=defaults["follow_up_after_tool_call"]): selector.BooleanSelector(),
+            vol.Optional("enable_tool_get_entities", default=defaults["enable_tool_get_entities"]): selector.BooleanSelector(),
+            vol.Optional("enable_tool_get_state", default=defaults["enable_tool_get_state"]): selector.BooleanSelector(),
+            vol.Optional("enable_tool_call_service", default=defaults["enable_tool_call_service"]): selector.BooleanSelector(),
+            vol.Optional("enable_tool_web_search", default=defaults["enable_tool_web_search"]): selector.BooleanSelector(),
         }
     )
 

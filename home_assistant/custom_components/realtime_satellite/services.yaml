@@ -76,6 +76,22 @@ apply_settings:
       name: Keep Listening After Tool Call
       selector:
         boolean:
+    enable_tool_get_entities:
+      name: Enable Get Entities Tool
+      selector:
+        boolean:
+    enable_tool_get_state:
+      name: Enable Get State Tool
+      selector:
+        boolean:
+    enable_tool_call_service:
+      name: Enable Call Service Tool
+      selector:
+        boolean:
+    enable_tool_web_search:
+      name: Enable Web Search Tool
+      selector:
+        boolean:
 
 refresh_openai_catalog:
   name: Refresh OpenAI Catalog

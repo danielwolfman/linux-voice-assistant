@@ -36,6 +36,10 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "end_silence_seconds": 0.8,
     "refractory_seconds": 2.0,
     "follow_up_after_tool_call": False,
+    "enable_tool_get_entities": True,
+    "enable_tool_get_state": True,
+    "enable_tool_call_service": True,
+    "enable_tool_web_search": True,
 }
 
 TEXT_SETTINGS: dict[str, dict[str, object]] = {
@@ -62,4 +66,8 @@ NUMBER_SETTINGS: dict[str, dict[str, object]] = {
 
 SWITCH_SETTINGS: dict[str, dict[str, object]] = {
     "follow_up_after_tool_call": {"name": "Keep Listening After Tool Call"},
+    "enable_tool_get_entities": {"name": "Enable Get Entities Tool"},
+    "enable_tool_get_state": {"name": "Enable Get State Tool"},
+    "enable_tool_call_service": {"name": "Enable Call Service Tool"},
+    "enable_tool_web_search": {"name": "Enable Web Search Tool"},
 }

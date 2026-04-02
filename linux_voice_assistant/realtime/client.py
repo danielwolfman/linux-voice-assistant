@@ -7,12 +7,17 @@ import base64
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, Optional, cast
+from typing import Any, Optional, Protocol, cast
 
 import numpy as np
 from openai import AsyncOpenAI
 
-from ..ha_tools.client import HomeAssistantToolBridge
+
+
+class ToolProvider(Protocol):
+    def tool_definitions(self) -> list[dict[str, Any]]: ...
+
+    async def execute_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]: ...
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,7 +30,7 @@ class OpenAIRealtimeClient:
         model: str,
         voice: str,
         instructions: str,
-        tools: HomeAssistantToolBridge,
+        tools: ToolProvider,
         api_base: Optional[str] = None,
         on_audio_delta: Callable[[bytes], Awaitable[None]],
         on_response_created: Callable[[str], Awaitable[None]],

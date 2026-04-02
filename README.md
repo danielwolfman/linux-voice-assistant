@@ -108,6 +108,7 @@ Notes:
 - `get_entities(query, area, domain, limit)`
 - `get_state(entity_id)`
 - `call_service(domain, service, target, data)`
+- `web_search(query, max_results)`
 
 ## Validation Targets
 

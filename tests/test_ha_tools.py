@@ -1,4 +1,5 @@
 from linux_voice_assistant.ha_tools.client import EntityRecord, _entity_match_score, _matches_area, _matches_query, _suggested_services
+from linux_voice_assistant.tools.web_search import extract_duckduckgo_results
 
 
 def test_matches_query_uses_name_area_and_entity_id():
@@ -51,3 +52,14 @@ def test_entity_result_includes_suggested_services_for_actionable_domains():
 def test_matches_area_uses_generic_token_matching():
     assert _matches_area("Living Room", "living room")
     assert not _matches_area("Office", "kitchen")
+
+
+def test_extract_duckduckgo_results_parses_titles_urls_and_snippets():
+    page = '''
+    <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fnews">Example Result</a>
+    <a class="result__snippet">Example snippet text</a>
+    '''
+
+    results = extract_duckduckgo_results(page, max_results=5)
+
+    assert results == [{"title": "Example Result", "url": "https://example.com/news", "snippet": "Example snippet text"}]

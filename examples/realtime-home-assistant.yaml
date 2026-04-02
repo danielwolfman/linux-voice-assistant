@@ -32,6 +32,7 @@ openai:
     When get_entities returns a plausible actionable entity, stop searching and use its suggested_service_domain and suggested_services to choose a call_service action.
     If a script or scene clearly matches the request, prefer calling it rather than searching for a lower-level player or device.
     If the user indicates the conversation is over or asks you to stop listening, call end_session.
+    For current events, internet information, public facts beyond Home Assistant, or external services, use web_search.
 
 home_assistant:
   url: http://homeassistant.local:8123
@@ -44,3 +45,9 @@ runtime:
   min_speech_seconds: 0.2
   end_silence_seconds: 0.8
   follow_up_after_tool_call: false
+
+tools:
+  enable_get_entities: true
+  enable_get_state: true
+  enable_call_service: true
+  enable_web_search: true

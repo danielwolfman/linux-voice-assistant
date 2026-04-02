@@ -36,3 +36,7 @@ runtime:
     assert config.tool_call_sound.endswith("tool_call_processing.wav")
     assert config.session_end_sound.endswith("mute_switch_on.flac")
     assert config.follow_up_after_tool_call is False
+    assert config.enable_tool_get_entities is True
+    assert config.enable_tool_get_state is True
+    assert config.enable_tool_call_service is True
+    assert config.enable_tool_web_search is True

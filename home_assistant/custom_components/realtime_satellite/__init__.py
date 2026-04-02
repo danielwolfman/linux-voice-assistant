@@ -6,6 +6,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
+import voluptuous as vol
 
 from .const import DEFAULT_SETTINGS, DOMAIN, PLATFORMS, SERVICE_APPLY_SETTINGS, SERVICE_REFRESH_OPENAI_CATALOG
 from .manager import RealtimeSatelliteSettingsManager
@@ -42,6 +43,8 @@ async def _register_services(hass: HomeAssistant, manager: RealtimeSatelliteSett
     if hass.services.has_service(DOMAIN, SERVICE_APPLY_SETTINGS):
         return
 
+    service_schema = vol.Schema({vol.Optional(key): object for key in DEFAULT_SETTINGS})
+
     async def async_apply_settings(call: ServiceCall) -> None:
         for key in DEFAULT_SETTINGS:
             if key in call.data:
@@ -49,7 +52,7 @@ async def _register_services(hass: HomeAssistant, manager: RealtimeSatelliteSett
         if "openai_api_key" in call.data:
             await manager.async_refresh_catalog()
 
-    hass.services.async_register(DOMAIN, SERVICE_APPLY_SETTINGS, async_apply_settings)
+    hass.services.async_register(DOMAIN, SERVICE_APPLY_SETTINGS, async_apply_settings, schema=service_schema)
 
     async def async_refresh_catalog(call: ServiceCall) -> None:
         del call

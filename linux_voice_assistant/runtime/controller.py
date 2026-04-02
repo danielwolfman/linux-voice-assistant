@@ -17,6 +17,8 @@ from ..ha_tools.settings_listener import HomeAssistantSettingsListener
 from ..models import ServerState
 from ..realtime.client import OpenAIRealtimeClient
 from ..mpv_player import MpvMediaPlayer
+from ..tools.registry import ToolRegistry
+from ..tools.web_search import WebSearchTool
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,7 +57,9 @@ class SessionController:
         self._end_session_requested = False
         self._response_delay_task: Optional[asyncio.Task[None]] = None
         self._wakeup_sound_task: Optional[asyncio.Task[None]] = None
-        self._tool_bridge = HomeAssistantToolBridge(config.ha_url, config.ha_token, verify_ssl=config.ha_verify_ssl)
+        self._ha_tool_bridge = HomeAssistantToolBridge(config.ha_url, config.ha_token, verify_ssl=config.ha_verify_ssl)
+        self._tool_registry = ToolRegistry(self._ha_tool_bridge, WebSearchTool())
+        self._tool_registry.set_enabled_tools(_enabled_tools_from_config(config))
         from ..audio.realtime_player import RealtimeAudioPlayer
 
         self._audio_player = RealtimeAudioPlayer(device=config.audio_output_device)
@@ -73,7 +77,7 @@ class SessionController:
             model=config.openai_model,
             voice=config.openai_voice,
             instructions=config.openai_instructions,
-            tools=self._tool_bridge,
+            tools=self._tool_registry,
             api_base=config.openai_api_base,
             on_audio_delta=self._on_audio_delta,
             on_response_created=self._on_response_created,
@@ -145,13 +149,14 @@ class SessionController:
         self._audio_player.close()
         await self._settings_listener.close()
         await self._realtime.close()
-        await self._tool_bridge.close()
+        await self._tool_registry.close()
 
     async def _apply_remote_settings(self, settings: dict[str, object]) -> None:
         changed_keys: list[str] = []
         new_model: Optional[str] = None
         new_voice: Optional[str] = None
         new_instructions: Optional[str] = None
+        refresh_tools = False
 
         for key, value in settings.items():
             if not hasattr(self.config, key):
@@ -169,12 +174,16 @@ class SessionController:
                 new_voice = str(value)
             elif key == "openai_instructions":
                 new_instructions = str(value)
+            elif key.startswith("enable_tool_"):
+                refresh_tools = True
 
         if not changed_keys:
             return
 
         _LOGGER.info("Applied Home Assistant settings update: %s", ", ".join(changed_keys))
-        if new_model is not None or new_voice is not None or new_instructions is not None:
+        if refresh_tools:
+            self._tool_registry.set_enabled_tools(_enabled_tools_from_config(self.config))
+        if new_model is not None or new_voice is not None or new_instructions is not None or refresh_tools:
             await self._realtime.update_session_settings(model=new_model, voice=new_voice, instructions=new_instructions)
 
     async def _handle_wakeup(self, wake_word_phrase: str) -> None:
@@ -523,3 +532,12 @@ _REALTIME_PRICING = {
 }
 
 _SUPPORTED_ERROR_VOICES = {"alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"}
+
+
+def _enabled_tools_from_config(config: AppConfig) -> dict[str, bool]:
+    return {
+        "get_entities": config.enable_tool_get_entities,
+        "get_state": config.enable_tool_get_state,
+        "call_service": config.enable_tool_call_service,
+        "web_search": config.enable_tool_web_search,
+    }

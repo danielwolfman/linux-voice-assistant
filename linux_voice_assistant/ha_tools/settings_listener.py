@@ -25,6 +25,10 @@ _REMOTE_KEYS = {
     "end_silence_seconds": float,
     "refractory_seconds": float,
     "follow_up_after_tool_call": bool,
+    "enable_tool_get_entities": bool,
+    "enable_tool_get_state": bool,
+    "enable_tool_call_service": bool,
+    "enable_tool_web_search": bool,
 }
 
 
