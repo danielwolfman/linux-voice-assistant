@@ -74,17 +74,6 @@ class RealtimeSatelliteSettingsManager:
         }
         self.activities.append(entry)
         self.activities = self.activities[-ACTIVITY_HISTORY_LIMIT:]
-        await self.hass.services.async_call(
-            "logbook",
-            "log",
-            {
-                "name": "OpenAI Real Time Assistant",
-                "message": f"{category}: {message}",
-                "domain": DOMAIN,
-                "entity_id": "sensor.openai_real_time_assistant_cost_last_1h",
-            },
-            blocking=False,
-        )
         await self._save_history()
         async_dispatcher_send(self.hass, UPDATE_SIGNAL)
 
@@ -108,6 +97,25 @@ class RealtimeSatelliteSettingsManager:
     @callback
     def recent_activities(self) -> list[dict[str, Any]]:
         return list(reversed(self.activities[-50:]))
+
+    @callback
+    def latest_activity_state(self) -> str:
+        recent = self.recent_activities()
+        if not recent:
+            return "No activity yet"
+        latest = recent[0]
+        text = f"{latest['category']}: {latest['message']}"
+        return text if len(text) <= 255 else text[:252] + "..."
+
+    @callback
+    def recent_activities_markdown(self, limit: int = 20) -> str:
+        lines = []
+        for entry in self.recent_activities()[:limit]:
+            timestamp = str(entry.get("timestamp", ""))[11:19]
+            category = str(entry.get("category", ""))
+            message = str(entry.get("message", ""))
+            lines.append(f"- `{timestamp}` **{category}**: {message}")
+        return "\n".join(lines)
 
     @callback
     def usage_summary(self, hours: int) -> dict[str, float | int]:

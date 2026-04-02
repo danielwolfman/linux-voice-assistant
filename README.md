@@ -148,11 +148,10 @@ It provides:
 - model and voice selectors
 - sound path and timing configuration
 - tool enable/disable toggles
-- Home Assistant activity log entries for:
-  - user transcripts
-  - assistant transcripts
-  - tool calls
-  - realtime errors
+- a visible `Latest Activity` sensor with:
+  - latest user transcript / assistant reply / tool call / error
+  - `recent_activities` attribute
+  - `recent_activities_markdown` attribute for a Markdown card
 - cost and token sensors sourced from OpenAI organization usage data
 
 ## Validation Targets
