@@ -33,6 +33,6 @@ runtime:
     assert config.ha_token == "env-token"
     assert config.session_timeout_seconds == 30
     assert config.processing_sound.endswith("processing.wav")
-    assert config.tool_call_sound.endswith("mute_switch_off.flac")
+    assert config.tool_call_sound.endswith("tool_call_processing.wav")
     assert config.session_end_sound.endswith("mute_switch_on.flac")
     assert config.follow_up_after_tool_call is False

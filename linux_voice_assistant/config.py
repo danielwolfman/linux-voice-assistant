@@ -211,7 +211,7 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
             args.tool_call_sound,
             os.getenv("LVA_TOOL_CALL_SOUND"),
             _get_str(yaml_config, "audio.tool_call_sound"),
-            str(_SOUNDS_DIR / "mute_switch_off.flac"),
+            str(_SOUNDS_DIR / "tool_call_processing.wav"),
         ),
         session_end_sound=_pick(
             args.session_end_sound,

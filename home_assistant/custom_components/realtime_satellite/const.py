@@ -28,7 +28,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     ),
     "wakeup_sound": "sounds/wake_word_triggered.flac",
     "processing_sound": "sounds/processing.wav",
-    "tool_call_sound": "sounds/mute_switch_off.flac",
+    "tool_call_sound": "sounds/tool_call_processing.wav",
     "session_end_sound": "sounds/mute_switch_on.flac",
     "session_timeout_seconds": 20.0,
     "vad_threshold": 0.005,

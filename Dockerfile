@@ -6,12 +6,12 @@ ENV PYTHONUNBUFFERED=1
 
 LABEL \
     org.opencontainers.image.authors="Open Home Foundation" \
-    org.opencontainers.image.description="Voice assistant for Home Assistant" \
-    org.opencontainers.image.documentation="https://github.com/OHF-Voice/linux-voice-assistant/blob/main/README.md" \
+    org.opencontainers.image.description="OpenAI Realtime Linux voice satellite for Home Assistant" \
+    org.opencontainers.image.documentation="https://github.com/danielwolfman/linux-voice-assistant/blob/main/README.md" \
     org.opencontainers.image.licenses="Apache-2.0" \
-    org.opencontainers.image.source="https://github.com/OHF-Voice/linux-voice-assistant" \
-    org.opencontainers.image.title="Linux-Voice-Assistant" \
-    org.opencontainers.image.url="https://github.com/OHF-Voice/linux-voice-assistant"
+    org.opencontainers.image.source="https://github.com/danielwolfman/linux-voice-assistant" \
+    org.opencontainers.image.title="Linux-Voice-Assistant Realtime" \
+    org.opencontainers.image.url="https://github.com/danielwolfman/linux-voice-assistant"
 
 ### Install packages:
 # - avahi-utils:        For zeroconf/mDNS discovery by Home Assistant
@@ -36,10 +36,11 @@ RUN apt-get update && \
     pipewire-pulse \
     build-essential \
     libmpv-dev \
+    libmpv2 \
+    libportaudio2 \
     libasound2-plugins \
     ca-certificates \
     iproute2 \
-    vim \
     procps && \
 apt-get clean
 
@@ -51,18 +52,14 @@ COPY script/ ./script/
 COPY pyproject.toml ./
 COPY setup.cfg ./
 COPY sounds/ ./sounds/
-COPY ../wakewords/ ./wakewords/
+COPY wakewords/ ./wakewords/
 COPY linux_voice_assistant/ ./linux_voice_assistant/
 COPY docker-entrypoint.sh ./
 COPY version.txt ./
 COPY version_githash.txt ./
 
 ### Run installation:
-RUN chmod +x docker-entrypoint.sh
-RUN ./script/setup
-
-### Set ports for ESPHome API:
-EXPOSE 6053
+RUN chmod +x docker-entrypoint.sh && ./script/setup
 
 ### Set start script:
 ENTRYPOINT ["./docker-entrypoint.sh"]

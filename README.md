@@ -66,6 +66,43 @@ linux-voice-assistant --list-output-devices
 linux-voice-assistant --config realtime-home-assistant.yaml --debug
 ```
 
+## Docker Run
+
+For long-running use on this Linux machine, you can run the Realtime satellite in Docker with host audio access.
+
+Requirements:
+
+- PipeWire/PulseAudio socket available on the host, usually `/run/user/1000/pulse/native`
+- `.env` present in the repo root
+- `local/realtime-home-assistant.yaml` present
+
+Build and start:
+
+```sh
+docker compose -f docker-compose.realtime.yml build
+docker compose -f docker-compose.realtime.yml up -d
+```
+
+View logs:
+
+```sh
+docker compose -f docker-compose.realtime.yml logs -f
+```
+
+Stop:
+
+```sh
+docker compose -f docker-compose.realtime.yml down
+```
+
+Notes:
+
+- The default tool-call progress sound is `sounds/tool_call_processing.wav`.
+
+- The compose file mounts `./local`, `./sounds`, and `./wakewords` into the container.
+- Preferences are stored at `/app/local/preferences.json` inside the container, which maps to `./local/preferences.json` on the host.
+- The container uses host networking and the host PulseAudio/PipeWire runtime directory for microphone and speaker access.
+
 ## Current Tool Surface
 
 - `get_entities(query, area, domain, limit)`

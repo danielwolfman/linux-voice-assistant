@@ -1,0 +1,34 @@
+services:
+  realtime-satellite:
+    container_name: realtime-satellite
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    user: "${LVA_USER_ID:-1000}:${LVA_USER_GROUP:-1000}"
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      XDG_RUNTIME_DIR: ${LVA_XDG_RUNTIME_DIR:-/run/user/1000}
+      PULSE_SERVER: ${LVA_PULSE_SERVER:-unix:/run/user/1000/pulse/native}
+      PULSE_COOKIE: ${LVA_PULSE_COOKIE:-/run/user/1000/pulse/cookie}
+      LVA_CONFIG: ${LVA_CONFIG:-/app/local/realtime-home-assistant.yaml}
+      LVA_PREFERENCES_FILE: /app/local/preferences.json
+    group_add:
+      - audio
+    cap_add:
+      - SYS_NICE
+    volumes:
+      - ./local:/app/local
+      - ./sounds:/app/sounds
+      - ./wakewords:/app/wakewords
+      - ${LVA_XDG_RUNTIME_DIR:-/run/user/1000}:${LVA_XDG_RUNTIME_DIR:-/run/user/1000}
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "linux_voice_assistant"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
