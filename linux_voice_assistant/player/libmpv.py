@@ -33,6 +33,7 @@ class LibMpvPlayer(AudioPlayer):
             log_handler=self._on_mpv_log,
             loglevel="error",
         )
+        self._mpv["volume-max"] = 200
 
         if device:
             self._mpv["audio-device"] = device
@@ -108,7 +109,7 @@ class LibMpvPlayer(AudioPlayer):
         """
         self._log.debug("unduck() called")
         with self._state_lock:
-            self._user_volume = max(0.0, min(100.0, float(volume)))
+            self._user_volume = max(0.0, min(200.0, float(volume)))
             self._apply_volume()
 
     def duck(self, factor: float = 0.5) -> None:
@@ -136,7 +137,7 @@ class LibMpvPlayer(AudioPlayer):
         """Apply effective volume (user volume × duck factor) to mpv."""
         self._log.debug("unduck() called")
         effective = self._user_volume * self._duck_factor
-        self._mpv.volume = max(0.0, min(100.0, effective))
+        self._mpv.volume = max(0.0, min(200.0, effective))
 
     def _on_end_file(self, event) -> None:
         callback: Optional[Callable[[], None]] = None

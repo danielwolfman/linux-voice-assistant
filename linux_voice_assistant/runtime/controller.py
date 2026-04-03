@@ -412,10 +412,12 @@ class SessionController:
             return
         self._error_sound_active = True
         self._mic_suppressed_until = max(self._mic_suppressed_until, time.monotonic() + 6.0)
+        self.state.tts_player.set_volume(_error_sound_volume_percent(self.state.volume))
         self.state.tts_player.play(str(error_sound), done_callback=self._on_realtime_error_sound_finished)
 
     def _on_realtime_error_sound_finished(self) -> None:
         self._error_sound_active = False
+        self.state.tts_player.set_volume(int(round(self.state.volume * 100)))
 
     def _reset_response_chain_state(self) -> None:
         self._tool_call_depth = 0
@@ -487,6 +489,11 @@ def _realtime_error_sound_path(voice: str, reason: str) -> Optional[Path]:
         return candidate
     fallback = base_dir / "marin" / "generic.mp3"
     return fallback if fallback.exists() else None
+
+
+def _error_sound_volume_percent(volume: float) -> int:
+    boosted = max(0.0, min(200.0, float(volume) * 200.0))
+    return int(round(boosted))
 
 
 def _format_usage_summary(model: str, usage: dict[str, int]) -> str:

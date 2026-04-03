@@ -237,7 +237,15 @@ class OpenAIRealtimeClient:
             await self._on_end_session_requested(reason)
             result = {"status": "ok", "reason": reason}
         else:
-            result = await self._tools.execute_tool(tool_name, arguments)
+            try:
+                result = await self._tools.execute_tool(tool_name, arguments)
+            except Exception as err:
+                _LOGGER.exception("Tool call failed: %s args=%s", tool_name, arguments)
+                result = {
+                    "error": str(err) or err.__class__.__name__,
+                    "tool_name": tool_name,
+                    "arguments": arguments,
+                }
         _LOGGER.debug("Realtime function result: %s result=%s", tool_name, result)
         assert self._connection is not None
         await self._connection.send(

@@ -32,6 +32,7 @@ _REMOTE_KEYS = {
 }
 
 _UNIQUE_ID_TO_KEY = {f"openai_real_time_assistant_{key}": key for key in _REMOTE_KEYS}
+_SETTINGS_SENSOR_ENTITY_ID = "sensor.openai_real_time_assistant_settings"
 
 
 class HomeAssistantSettingsListener:
@@ -96,6 +97,16 @@ class HomeAssistantSettingsListener:
         _LOGGER.debug("Discovered Home Assistant setting entities: %s", discovered)
 
     async def _load_initial_settings(self) -> None:
+        try:
+            sensor_state = await self._request_json("GET", f"/api/states/{_SETTINGS_SENSOR_ENTITY_ID}")
+        except Exception:
+            _LOGGER.exception("Failed to load Home Assistant settings sensor state")
+        else:
+            parsed_sensor_settings = _parse_settings_sensor_state(sensor_state)
+            if parsed_sensor_settings:
+                await self._on_update(parsed_sensor_settings)
+                return
+
         settings: dict[str, Any] = {}
         for key, entity_id in self._entity_ids_by_key.items():
             try:
@@ -144,6 +155,12 @@ class HomeAssistantSettingsListener:
                     continue
 
                 entity_id = str(new_state.get("entity_id") or "")
+                if entity_id == _SETTINGS_SENSOR_ENTITY_ID:
+                    parsed_sensor_settings = _parse_settings_sensor_state(new_state)
+                    if parsed_sensor_settings:
+                        await self._on_update(parsed_sensor_settings)
+                    continue
+
                 key = _key_for_entity_id(entity_id, self._entity_ids_by_key)
                 if key is None:
                     continue
@@ -199,6 +216,8 @@ def _parse_entity_state(key: str, state: Any) -> Optional[Any]:
     if not isinstance(state, dict):
         return None
     raw_state = state.get("state")
+    if raw_state in {"unknown", "unavailable", None}:
+        return None
     value_type = _REMOTE_KEYS[key]
     try:
         if value_type is bool:
@@ -207,3 +226,29 @@ def _parse_entity_state(key: str, state: Any) -> Optional[Any]:
     except (TypeError, ValueError):
         _LOGGER.warning("Ignoring invalid Home Assistant setting state for %s: %r", key, raw_state)
         return None
+
+
+def _parse_settings_sensor_state(state: Any) -> dict[str, Any]:
+    if not isinstance(state, dict):
+        return {}
+
+    attributes = state.get("attributes")
+    if not isinstance(attributes, dict):
+        return {}
+
+    parsed: dict[str, Any] = {}
+    for key, value_type in _REMOTE_KEYS.items():
+        raw_value = attributes.get(key)
+        if raw_value in {"unknown", "unavailable", None}:
+            continue
+        try:
+            if value_type is bool:
+                if isinstance(raw_value, bool):
+                    parsed[key] = raw_value
+                else:
+                    parsed[key] = str(raw_value).lower() == "on"
+            else:
+                parsed[key] = value_type(raw_value)
+        except (TypeError, ValueError):
+            _LOGGER.warning("Ignoring invalid Home Assistant sensor setting for %s: %r", key, raw_value)
+    return parsed
