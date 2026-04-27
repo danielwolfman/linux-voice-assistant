@@ -1,0 +1,1 @@
+"""VAPE satellite server package."""
