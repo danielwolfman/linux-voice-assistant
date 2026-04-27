@@ -12,6 +12,7 @@ from typing import Optional, cast
 import numpy as np
 
 from ..config import AppConfig
+from ..frontend import AssistantPlaybackSink
 from ..ha_tools.activity_logger import HomeAssistantActivityLogger
 from ..ha_tools.client import HomeAssistantToolBridge
 from ..ha_tools.settings_listener import HomeAssistantSettingsListener
@@ -37,10 +38,18 @@ class SessionPhase(str, Enum):
 
 
 class SessionController:
-    def __init__(self, state: ServerState, config: AppConfig, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self,
+        state: ServerState,
+        config: AppConfig,
+        loop: asyncio.AbstractEventLoop,
+        audio_player: Optional[AssistantPlaybackSink] = None,
+        input_sample_rate: int = 16000,
+    ) -> None:
         self.state = state
         self.config = config
         self.loop = loop
+        self._input_sample_rate = input_sample_rate
         self.phase = SessionPhase.IDLE
         self._session_deadline: Optional[float] = None
         self._mic_suppressed_until = 0.0
@@ -64,7 +73,7 @@ class SessionController:
         self._tool_registry.set_enabled_tools(_enabled_tools_from_config(config))
         from ..audio.realtime_player import RealtimeAudioPlayer
 
-        self._audio_player = RealtimeAudioPlayer(device=config.audio_output_device)
+        self._audio_player = audio_player or RealtimeAudioPlayer(device=config.audio_output_device)
         self._audio_player.set_volume(state.volume)
         self._tool_sound_player = MpvMediaPlayer()
         self._tool_sound_player.set_volume(int(round(state.volume * 100)))
@@ -115,7 +124,7 @@ class SessionController:
                 self._last_voice_at = now
 
         self._session_deadline = now + self.config.session_timeout_seconds
-        self._schedule(self._realtime.append_input_audio(audio_chunk))
+        self._schedule(self._realtime.append_input_audio(audio_chunk, source_rate=self._input_sample_rate))
 
         if (
             self._turn_open

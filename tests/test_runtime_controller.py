@@ -1,6 +1,7 @@
 import numpy as np
 
 from linux_voice_assistant.audio.pcm import resample_pcm16_mono
+from linux_voice_assistant.frontend import AssistantPlaybackSink
 from linux_voice_assistant.realtime.client import _extract_assistant_transcript, classify_realtime_error
 from linux_voice_assistant.runtime.controller import _estimate_realtime_cost_usd, _looks_like_question, pcm16_rms
 
@@ -59,3 +60,43 @@ def test_classify_realtime_error_detects_quota_and_auth():
     assert classify_realtime_error("insufficient_quota: no credits left")[0] == "quota_billing"
     assert classify_realtime_error("invalid_api_key: unauthorized")[0] == "authentication"
     assert classify_realtime_error("service unavailable")[0] == "service_unavailable"
+
+
+class FakePlaybackSink:
+    def __init__(self):
+        self.audio_chunks = []
+        self.stopped = False
+        self.closed = False
+        self.volume = None
+        self.is_playing = False
+        self.pending_samples = 0
+
+    def set_volume(self, volume: float) -> None:
+        self.volume = volume
+
+    def add_data(self, data: bytes) -> None:
+        self.audio_chunks.append(data)
+        self.is_playing = True
+        self.pending_samples += len(data) // 2
+
+    def stop(self) -> None:
+        self.stopped = True
+        self.is_playing = False
+        self.pending_samples = 0
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_fake_playback_sink_satisfies_protocol():
+    sink: AssistantPlaybackSink = FakePlaybackSink()
+
+    sink.set_volume(0.5)
+    sink.add_data(b"\x00\x00")
+    sink.stop()
+    sink.close()
+
+    assert sink.volume == 0.5
+    assert sink.audio_chunks == [b"\x00\x00"]
+    assert sink.stopped
+    assert sink.closed
