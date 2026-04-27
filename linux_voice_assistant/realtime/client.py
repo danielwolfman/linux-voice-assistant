@@ -9,9 +9,9 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Optional, Protocol, cast
 
-import numpy as np
 from openai import AsyncOpenAI
 
+from ..audio.pcm import resample_pcm16_mono
 
 
 class ToolProvider(Protocol):
@@ -80,11 +80,11 @@ class OpenAIRealtimeClient:
             await self.close()
             raise
 
-    async def append_input_audio(self, audio_chunk: bytes) -> None:
+    async def append_input_audio(self, audio_chunk: bytes, *, source_rate: int = 16000) -> None:
         try:
             await self.connect()
             assert self._connection is not None
-            realtime_chunk = resample_pcm16_mono(audio_chunk, source_rate=16000, target_rate=24000)
+            realtime_chunk = resample_pcm16_mono(audio_chunk, source_rate=source_rate, target_rate=24000)
             await self._connection.send(
                 {
                     "type": "input_audio_buffer.append",
@@ -383,18 +383,3 @@ def _extract_error_message(error: Any) -> str:
     code = _lookup(nested_error, "code") or _lookup(error, "code")
     pieces = [str(part).strip() for part in [code, message or str(error)] if str(part).strip()]
     return ": ".join(pieces)
-
-
-def resample_pcm16_mono(audio_chunk: bytes, source_rate: int, target_rate: int) -> bytes:
-    if source_rate == target_rate or not audio_chunk:
-        return audio_chunk
-
-    samples = np.frombuffer(audio_chunk, dtype="<i2")
-    if samples.size == 0:
-        return audio_chunk
-
-    source_positions = np.arange(samples.size, dtype=np.float32)
-    target_length = max(1, int(round(samples.size * target_rate / source_rate)))
-    target_positions = np.linspace(0, samples.size - 1, num=target_length, dtype=np.float32)
-    resampled = np.interp(target_positions, source_positions, samples.astype(np.float32))
-    return np.clip(resampled, -32768, 32767).astype("<i2").tobytes()

@@ -1,6 +1,7 @@
 import numpy as np
 
-from linux_voice_assistant.realtime.client import _extract_assistant_transcript, classify_realtime_error, resample_pcm16_mono
+from linux_voice_assistant.audio.pcm import resample_pcm16_mono
+from linux_voice_assistant.realtime.client import _extract_assistant_transcript, classify_realtime_error
 from linux_voice_assistant.runtime.controller import _estimate_realtime_cost_usd, _looks_like_question, pcm16_rms
 
 
