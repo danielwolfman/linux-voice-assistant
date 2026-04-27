@@ -4,7 +4,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    restart: unless-stopped
+    restart: "no"
     network_mode: host
     user: "${LVA_USER_ID:-1000}:${LVA_USER_GROUP:-1000}"
     env_file:

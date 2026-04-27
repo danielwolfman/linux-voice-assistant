@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional
 
 from aiohttp import WSMsgType, web
+from aiohttp.client_exceptions import ClientConnectionResetError
 
 from ..audio.pcm import PcmFormat, resample_pcm16_mono
 from .protocol import ProtocolError, build_control, negotiate_audio_format, parse_control
@@ -37,18 +41,19 @@ class RemotePlaybackSink:
         self._output_sample_rate = output_sample_rate
         self._send_json = send_json
         self._send_binary = send_binary
-        self._pending_samples = 0
-        self._playing = False
+        self._playing_until = 0.0
         self._started = False
         self._closed = False
+        self._file_task: Optional[asyncio.Task[None]] = None
 
     @property
     def is_playing(self) -> bool:
-        return self._playing
+        return not self._closed and time.monotonic() < self._playing_until
 
     @property
     def pending_samples(self) -> int:
-        return self._pending_samples
+        remaining_seconds = max(0.0, self._playing_until - time.monotonic())
+        return int(remaining_seconds * self._output_sample_rate)
 
     def set_volume(self, volume: float) -> None:
         del volume
@@ -58,9 +63,27 @@ class RemotePlaybackSink:
             return
         asyncio.create_task(self._send_audio(data))
 
+    def play_file(self, path: str, done_callback: Optional[Callable[[], None]] = None) -> None:
+        if self._closed:
+            return
+        if self._file_task is not None:
+            self._file_task.cancel()
+            self._file_task = None
+        if self._started or self.is_playing:
+            self.stop()
+        self._file_task = asyncio.create_task(self._send_file_audio(Path(path), done_callback))
+
+    def stop_file(self) -> None:
+        if self._file_task is not None:
+            self._file_task.cancel()
+            self._file_task = None
+        self.stop()
+
     def stop(self) -> None:
-        self._pending_samples = 0
-        self._playing = False
+        if self._file_task is not None:
+            self._file_task.cancel()
+            self._file_task = None
+        self._playing_until = 0.0
         self._started = False
         if not self._closed:
             asyncio.create_task(self._send_json(build_control("stop_playback")))
@@ -68,6 +91,10 @@ class RemotePlaybackSink:
     def close(self) -> None:
         self._closed = True
         self.stop()
+
+    def set_remote_state(self, state: str) -> None:
+        if not self._closed:
+            asyncio.create_task(self._send_json(build_control("set_state", state=state)))
 
     async def _send_audio(self, data: bytes) -> None:
         if not self._started:
@@ -80,11 +107,60 @@ class RemotePlaybackSink:
             self._started = True
 
         output = resample_pcm16_mono(data, source_rate=24000, target_rate=self._output_sample_rate)
-        self._pending_samples += len(output) // 2
-        self._playing = True
         await self._send_binary(output)
-        self._pending_samples = max(0, self._pending_samples - (len(output) // 2))
-        self._playing = self._pending_samples > 0
+        samples = len(output) // 2
+        now = time.monotonic()
+        self._playing_until = max(now, self._playing_until) + (samples / self._output_sample_rate)
+
+    async def _send_file_audio(self, path: Path, done_callback: Optional[Callable[[], None]]) -> None:
+        completed = False
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "ffmpeg",
+                "-v",
+                "error",
+                "-i",
+                str(path),
+                "-f",
+                "s16le",
+                "-acodec",
+                "pcm_s16le",
+                "-ac",
+                "1",
+                "-ar",
+                "24000",
+                "pipe:1",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+            if process.returncode != 0:
+                _LOGGER.warning("Failed to decode cue sound %s: %s", path, stderr.decode(errors="replace").strip())
+                completed = True
+                return
+            for offset in range(0, len(stdout), 4096):
+                if self._closed:
+                    return
+                await self._send_audio(stdout[offset : offset + 4096])
+            await self._wait_for_playback_time()
+            completed = True
+        except asyncio.CancelledError:
+            raise
+        except FileNotFoundError:
+            _LOGGER.warning("ffmpeg is required to play cue sound files")
+            completed = True
+        finally:
+            if self._file_task is asyncio.current_task():
+                self._file_task = None
+            if completed and not self._closed and done_callback is not None:
+                done_callback()
+
+    async def _wait_for_playback_time(self) -> None:
+        while not self._closed:
+            remaining = self._playing_until - time.monotonic()
+            if remaining <= 0:
+                return
+            await asyncio.sleep(min(0.05, remaining))
 
 
 class SatelliteSessionHandler:
@@ -95,6 +171,7 @@ class SatelliteSessionHandler:
         message = parse_control(raw_message)
         if message.type == "wake_detected":
             wake_word = str(message.payload.get("wake_word") or "wake")
+            _LOGGER.info("VAPE wake detected: %s", wake_word)
             self._controller.wakeup(RemoteWakeWord(id=wake_word, wake_word=wake_word))
             await send_json(build_control("start_capture"))
             return
@@ -133,15 +210,21 @@ def create_app(session_factory: SessionFactory, *, path: str = "/vape") -> web.A
     async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
         websocket = web.WebSocketResponse()
         await websocket.prepare(request)
+        peer = request.remote or "unknown"
+        _LOGGER.info("VAPE client connected from %s", peer)
 
         async def send_json(payload: dict) -> None:
-            await websocket.send_json(payload)
+            try:
+                await websocket.send_str(json.dumps(payload, separators=(",", ":")))
+            except ClientConnectionResetError:
+                _LOGGER.debug("Dropped control frame for closing VAPE client: %s", payload.get("type"))
 
         async def send_binary(payload: bytes) -> None:
             await websocket.send_bytes(payload)
 
         selected_format: Optional[PcmFormat] = None
         handler: Optional[SatelliteSessionHandler] = None
+        received_audio = False
 
         try:
             async for ws_message in websocket:
@@ -150,6 +233,12 @@ def create_app(session_factory: SessionFactory, *, path: str = "/vape") -> web.A
                     if control.type == "hello":
                         selected_format = negotiate_audio_format(control)
                         handler = session_factory(selected_format, send_json, send_binary)
+                        _LOGGER.info(
+                            "VAPE client negotiated %s/%s/%s",
+                            selected_format.codec,
+                            selected_format.sample_rate,
+                            selected_format.channels,
+                        )
                         await send_json(
                             build_control(
                                 "hello_ack",
@@ -163,12 +252,17 @@ def create_app(session_factory: SessionFactory, *, path: str = "/vape") -> web.A
                 elif ws_message.type == WSMsgType.BINARY:
                     if handler is None or selected_format is None:
                         raise ProtocolError("hello must be sent before audio")
+                    if not received_audio:
+                        _LOGGER.info("VAPE audio uplink started from %s", peer)
+                        received_audio = True
                     handler.handle_audio(ws_message.data)
                 elif ws_message.type == WSMsgType.ERROR:
                     _LOGGER.warning("VAPE WebSocket error: %s", websocket.exception())
         except ProtocolError as err:
             await websocket.send_json(build_control("error", code="protocol_error", message=str(err)))
             await websocket.close()
+        finally:
+            _LOGGER.info("VAPE client disconnected from %s", peer)
 
         return websocket
 

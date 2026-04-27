@@ -9,6 +9,7 @@ import logging
 import sys
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from queue import Queue
 from typing import Dict, List, Optional, Set, Union
@@ -144,6 +145,7 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
 
     from .vape.server import create_app, create_session_factory
 
+    config = _prepare_vape_server_config(config)
     logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO)
     _LOGGER.debug("Loaded config: %s", config)
     logging.getLogger("openai.resources.realtime.realtime").setLevel(logging.INFO)
@@ -184,6 +186,15 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
         pass
     finally:
         await runner.cleanup()
+
+
+def _prepare_vape_server_config(config: AppConfig) -> AppConfig:
+    config = replace(
+        config,
+        wakeup_sound=None,
+        session_end_sound=None,
+    )
+    return config
 
 
 class NullStopWord:

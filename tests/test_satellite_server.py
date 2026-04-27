@@ -1,4 +1,5 @@
 import asyncio
+import wave
 
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -90,6 +91,43 @@ async def _test_remote_playback_sink_sends_start_audio_and_stop():
     assert len(sent_binary[0]) == 8
     assert sink.pending_samples == 0
     assert not sink.is_playing
+
+
+def test_remote_playback_sink_streams_audio_file(tmp_path):
+    asyncio.run(_test_remote_playback_sink_streams_audio_file(tmp_path))
+
+
+async def _test_remote_playback_sink_streams_audio_file(tmp_path):
+    sound_file = tmp_path / "cue.wav"
+    with wave.open(str(sound_file), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(b"\x00\x00\x01\x00" * 120)
+
+    sent_json = []
+    sent_binary = []
+    finished = asyncio.Event()
+
+    async def send_json(payload):
+        sent_json.append(payload)
+
+    async def send_binary(payload):
+        sent_binary.append(payload)
+
+    sink = RemotePlaybackSink(
+        selected_input_format=PcmFormat(codec="pcm_s16le", sample_rate=24000, channels=1),
+        output_sample_rate=48000,
+        send_json=send_json,
+        send_binary=send_binary,
+    )
+
+    sink.play_file(str(sound_file), done_callback=finished.set)
+    await asyncio.wait_for(finished.wait(), timeout=5)
+
+    assert sent_json[0]["type"] == "start_playback"
+    assert sent_binary
+    assert sum(len(chunk) for chunk in sent_binary) > 0
 
 
 def test_create_session_factory_builds_remote_playback_sink():

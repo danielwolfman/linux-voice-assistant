@@ -133,6 +133,8 @@ It listens on `ws://0.0.0.0:8765/vape` by default and expects a VAPE-compatible 
 python examples/vape_fake_client.py --url ws://127.0.0.1:8765/vape --wav sample-command.wav
 ```
 
+For permanent deployment on a remote Linux server and for flashing additional VAPE boxes, see `docs/vape_satellite_deployment.md`.
+
 ## Current Features
 
 - local wake word on Linux

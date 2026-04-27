@@ -53,15 +53,18 @@ class SessionController:
         self.phase = SessionPhase.IDLE
         self._session_deadline: Optional[float] = None
         self._mic_suppressed_until = 0.0
-        self._follow_up_mic_holdoff_seconds = 1.25
-        self._assistant_audio_tail_seconds = 0.75
+        self._follow_up_mic_holdoff_seconds = 2.5 if config.frontend == "vape-server" else 1.25
+        self._assistant_audio_tail_seconds = 2.0 if config.frontend == "vape-server" else 0.75
         self._turn_open = False
         self._speech_started_at: Optional[float] = None
         self._last_voice_at: Optional[float] = None
+        self._last_audio_level_log_at = 0.0
         self._processing_sound_active = False
         self._tool_sound_active = False
         self._error_sound_active = False
+        self._logged_response_audio = False
         self._realtime_error_in_progress = False
+        self._last_remote_state: Optional[str] = None
         self._tool_call_depth = 0
         self._tool_called_in_response_chain = False
         self._end_session_requested = False
@@ -110,15 +113,20 @@ class SessionController:
 
         if self.phase != SessionPhase.STREAMING_INPUT or self.state.muted:
             return
+        if now < self._mic_suppressed_until:
+            return
 
         level = pcm16_rms(audio_chunk)
+        if now - self._last_audio_level_log_at >= 1.0:
+            self._last_audio_level_log_at = now
+            _LOGGER.info("Input audio level rms=%.4f threshold=%.4f", level, self.config.vad_threshold)
         if not self._turn_open:
             if level < self.config.vad_threshold:
                 return
             self._turn_open = True
             self._speech_started_at = now
             self._last_voice_at = now
-            _LOGGER.debug("Speech detected, opening turn (rms=%.4f threshold=%.4f)", level, self.config.vad_threshold)
+            _LOGGER.info("Speech detected, opening turn (rms=%.4f threshold=%.4f)", level, self.config.vad_threshold)
         else:
             if level >= self.config.vad_threshold:
                 self._last_voice_at = now
@@ -138,7 +146,7 @@ class SessionController:
             self._speech_started_at = None
             self._last_voice_at = None
             self._set_phase(SessionPhase.SESSION_STARTING)
-            _LOGGER.debug("Committing turn after silence (rms=%.4f)", level)
+            _LOGGER.info("Committing turn after silence (rms=%.4f)", level)
             self._play_processing_sound()
             self._schedule(self._realtime.commit_turn())
 
@@ -180,6 +188,15 @@ class SessionController:
 
         for key, value in settings.items():
             if not hasattr(self.config, key):
+                continue
+            if self.config.frontend == "vape-server" and key in {
+                "wakeup_sound",
+                "processing_sound",
+                "tool_call_sound",
+                "session_end_sound",
+                "vad_threshold",
+                "end_silence_seconds",
+            }:
                 continue
             current_value = getattr(self.config, key)
             if current_value == value:
@@ -265,6 +282,9 @@ class SessionController:
             await self._realtime.clear_input_audio()
 
     async def _on_audio_delta(self, audio: bytes) -> None:
+        if not self._logged_response_audio:
+            _LOGGER.info("Realtime response audio started")
+            self._logged_response_audio = True
         self._stop_processing_sound()
         self._stop_tool_sound()
         self._mic_suppressed_until = max(self._mic_suppressed_until, time.monotonic() + self._assistant_audio_tail_seconds)
@@ -273,13 +293,14 @@ class SessionController:
         self._audio_player.add_data(audio)
 
     async def _on_response_created(self, response_id: str) -> None:
-        _LOGGER.debug("Realtime response started: %s", response_id)
+        self._logged_response_audio = False
+        _LOGGER.info("Realtime response started: %s", response_id)
 
     async def _on_response_done(self, response_id: str, status: str, usage: dict[str, int], transcript: str, model: str) -> None:
-        _LOGGER.debug("Realtime response finished: %s (%s)", response_id, status)
+        _LOGGER.info("Realtime response finished: %s (%s)", response_id, status)
         if transcript:
-            _LOGGER.debug("Realtime final assistant transcript: %s", transcript)
-        _LOGGER.debug("Realtime usage: %s", _format_usage_summary(model, usage))
+            _LOGGER.info("Realtime final assistant transcript: %s", transcript)
+        _LOGGER.info("Realtime usage: %s", _format_usage_summary(model, usage))
         if self.phase == SessionPhase.TOOL_CALL:
             _LOGGER.debug("Ignoring intermediate response.done while awaiting additional tool or final answer")
             return
@@ -367,6 +388,21 @@ class SessionController:
         if phase != self.phase:
             _LOGGER.debug("Session phase: %s -> %s", self.phase.value, phase.value)
             self.phase = phase
+            remote_state = {
+                SessionPhase.IDLE: "idle",
+                SessionPhase.WAKE_DETECTED: "listening",
+                SessionPhase.STREAMING_INPUT: "listening",
+                SessionPhase.INTERRUPTED: "listening",
+                SessionPhase.SESSION_STARTING: "thinking",
+                SessionPhase.TOOL_CALL: "thinking",
+                SessionPhase.PLAYING_OUTPUT: "speaking",
+                SessionPhase.SESSION_TIMEOUT: "idle",
+                SessionPhase.BACK_TO_IDLE: "idle",
+            }.get(phase)
+            state_setter = getattr(self._audio_player, "set_remote_state", None)
+            if remote_state and remote_state != self._last_remote_state and callable(state_setter):
+                self._last_remote_state = remote_state
+                state_setter(remote_state)
 
     def _schedule(self, coroutine) -> None:
         asyncio.run_coroutine_threadsafe(coroutine, self.loop)
@@ -377,13 +413,21 @@ class SessionController:
         if not Path(self.config.processing_sound).exists():
             return
         self._processing_sound_active = True
-        self.state.tts_player.play(self.config.processing_sound, done_callback=self._on_processing_sound_finished)
+        remote_play_file = getattr(self._audio_player, "play_file", None)
+        if callable(remote_play_file):
+            remote_play_file(self.config.processing_sound, done_callback=self._on_processing_sound_finished)
+        else:
+            self.state.tts_player.play(self.config.processing_sound, done_callback=self._on_processing_sound_finished)
 
     def _stop_processing_sound(self) -> None:
         if not self._processing_sound_active:
             return
         self._processing_sound_active = False
-        self.state.tts_player.stop()
+        remote_stop_file = getattr(self._audio_player, "stop_file", None)
+        if callable(remote_stop_file):
+            remote_stop_file()
+        else:
+            self.state.tts_player.stop()
 
     def _on_processing_sound_finished(self) -> None:
         self._processing_sound_active = False
@@ -427,7 +471,11 @@ class SessionController:
             return
         self._error_sound_active = True
         self._mic_suppressed_until = max(self._mic_suppressed_until, time.monotonic() + 6.0)
-        self.state.tts_player.play(str(error_sound), done_callback=self._on_realtime_error_sound_finished)
+        remote_play_file = getattr(self._audio_player, "play_file", None)
+        if callable(remote_play_file):
+            remote_play_file(str(error_sound), done_callback=self._on_realtime_error_sound_finished)
+        else:
+            self.state.tts_player.play(str(error_sound), done_callback=self._on_realtime_error_sound_finished)
 
     def _on_realtime_error_sound_finished(self) -> None:
         self._error_sound_active = False
@@ -467,13 +515,21 @@ class SessionController:
     def _play_tool_sound_loop(self) -> None:
         if not self._tool_sound_active or not self.config.tool_call_sound:
             return
-        self._tool_sound_player.play(self.config.tool_call_sound, done_callback=self._on_tool_sound_finished)
+        remote_play_file = getattr(self._audio_player, "play_file", None)
+        if callable(remote_play_file):
+            remote_play_file(self.config.tool_call_sound, done_callback=self._on_tool_sound_finished)
+        else:
+            self._tool_sound_player.play(self.config.tool_call_sound, done_callback=self._on_tool_sound_finished)
 
     def _stop_tool_sound(self) -> None:
         if not self._tool_sound_active:
             return
         self._tool_sound_active = False
-        self._tool_sound_player.stop()
+        remote_stop_file = getattr(self._audio_player, "stop_file", None)
+        if callable(remote_stop_file):
+            remote_stop_file()
+        else:
+            self._tool_sound_player.stop()
 
     def _on_tool_sound_finished(self) -> None:
         if not self._tool_sound_active:
