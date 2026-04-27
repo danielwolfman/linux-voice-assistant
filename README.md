@@ -119,6 +119,20 @@ Notes:
 - Preferences are stored at `/app/local/preferences.json` inside the container, which maps to `./local/preferences.json` on the host.
 - The container uses host networking and the host PulseAudio/PipeWire runtime directory for microphone and speaker access.
 
+## VAPE Satellite Server Preview
+
+The Linux-side VAPE server is started with:
+
+```sh
+linux-voice-assistant --config realtime-home-assistant.yaml --frontend vape-server --debug
+```
+
+It listens on `ws://0.0.0.0:8765/vape` by default and expects a VAPE-compatible client to send JSON control frames and binary PCM16 mono audio frames. Before custom VAPE firmware is flashed, use the fake client with a 16-bit mono WAV file:
+
+```sh
+python examples/vape_fake_client.py --url ws://127.0.0.1:8765/vape --wav sample-command.wav
+```
+
 ## Current Features
 
 - local wake word on Linux
