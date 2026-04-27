@@ -59,6 +59,11 @@ class AppConfig:
     enable_tool_get_state: bool
     enable_tool_call_service: bool
     enable_tool_web_search: bool
+    frontend: str
+    vape_server_host: str
+    vape_server_port: int
+    vape_server_path: str
+    vape_output_sample_rate: int
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -94,6 +99,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-silence-seconds", type=float, help="Silence duration that ends a turn")
     parser.add_argument("--follow-up-after-tool-call", action="store_true", help="Keep listening after a tool-backed response")
     parser.add_argument("--no-follow-up-after-tool-call", action="store_true", help="Return to wake-word mode after a tool-backed response")
+    parser.add_argument("--frontend", choices=["local", "vape-server"], help="Audio frontend to run")
+    parser.add_argument("--vape-server-host", help="Host/IP for the VAPE satellite WebSocket server")
+    parser.add_argument("--vape-server-port", type=int, help="Port for the VAPE satellite WebSocket server")
+    parser.add_argument("--vape-server-path", help="WebSocket path for VAPE satellite clients")
+    parser.add_argument("--vape-output-sample-rate", type=int, choices=[24000, 48000], help="PCM sample rate sent back to VAPE")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser
 
@@ -242,6 +252,11 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
         enable_tool_get_state=bool(_pick(_env_bool("LVA_ENABLE_TOOL_GET_STATE"), _get_bool(yaml_config, "tools.enable_get_state"), True)),
         enable_tool_call_service=bool(_pick(_env_bool("LVA_ENABLE_TOOL_CALL_SERVICE"), _get_bool(yaml_config, "tools.enable_call_service"), True)),
         enable_tool_web_search=bool(_pick(_env_bool("LVA_ENABLE_TOOL_WEB_SEARCH"), _get_bool(yaml_config, "tools.enable_web_search"), True)),
+        frontend=str(_pick(args.frontend, os.getenv("LVA_FRONTEND"), _get_str(yaml_config, "frontend"), "local")),
+        vape_server_host=str(_pick(args.vape_server_host, os.getenv("LVA_VAPE_SERVER_HOST"), _get_str(yaml_config, "vape_server.host"), "0.0.0.0")),
+        vape_server_port=int(_pick(args.vape_server_port, _env_int("LVA_VAPE_SERVER_PORT"), _get_int(yaml_config, "vape_server.port"), 8765)),
+        vape_server_path=str(_pick(args.vape_server_path, os.getenv("LVA_VAPE_SERVER_PATH"), _get_str(yaml_config, "vape_server.path"), "/vape")),
+        vape_output_sample_rate=int(_pick(args.vape_output_sample_rate, _env_int("LVA_VAPE_OUTPUT_SAMPLE_RATE"), _get_int(yaml_config, "vape_server.output_sample_rate"), 24000)),
     )
     return config, args
 

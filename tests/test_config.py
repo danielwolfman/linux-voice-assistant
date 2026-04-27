@@ -40,3 +40,34 @@ runtime:
     assert config.enable_tool_get_state is True
     assert config.enable_tool_call_service is True
     assert config.enable_tool_web_search is True
+
+
+def test_load_config_reads_vape_server_options(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+home_assistant:
+  url: http://yaml.local:8123
+  token: yaml-token
+openai:
+  api_key: yaml-openai
+vape_server:
+  host: 0.0.0.0
+  port: 8765
+  path: /vape
+  output_sample_rate: 48000
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("HOME_ASSISTANT_URL", raising=False)
+    monkeypatch.delenv("HOME_ASSISTANT_TOKEN", raising=False)
+
+    config, _ = load_config(["--config", os.fspath(config_path), "--frontend", "vape-server"])
+
+    assert config.frontend == "vape-server"
+    assert config.vape_server_host == "0.0.0.0"
+    assert config.vape_server_port == 8765
+    assert config.vape_server_path == "/vape"
+    assert config.vape_output_sample_rate == 48000

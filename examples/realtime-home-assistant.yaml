@@ -51,3 +51,11 @@ tools:
   enable_get_state: true
   enable_call_service: true
   enable_web_search: true
+
+# frontend: local
+
+# vape_server:
+#   host: 0.0.0.0
+#   port: 8765
+#   path: /vape
+#   output_sample_rate: 24000
