@@ -15,9 +15,12 @@ from ..audio.pcm import resample_pcm16_mono
 
 
 class ToolProvider(Protocol):
-    def tool_definitions(self) -> list[dict[str, Any]]: ...
+    def tool_definitions(self) -> list[dict[str, Any]]:
+        raise NotImplementedError
 
-    async def execute_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]: ...
+    async def execute_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,12 +72,10 @@ class OpenAIRealtimeClient:
 
         try:
             self._connection_context = self._client.realtime.connect(model=self._model)
-            self._connection = await self._connection_context.__aenter__()
+            self._connection = await self._connection_context.__aenter__()  # pylint: disable=unnecessary-dunder-call
             session_config: Any = self._build_session_config()
             await self._connection.session.update(session=session_config)
             self._reader_task = asyncio.create_task(self._read_events())
-        except asyncio.CancelledError:
-            raise
         except Exception as err:
             await self._notify_error(err)
             await self.close()
@@ -91,8 +92,6 @@ class OpenAIRealtimeClient:
                     "audio": base64.b64encode(realtime_chunk).decode("utf-8"),
                 }
             )
-        except asyncio.CancelledError:
-            raise
         except Exception as err:
             await self._notify_error(err)
 
@@ -102,8 +101,6 @@ class OpenAIRealtimeClient:
                 return
             await self._connection.send({"type": "input_audio_buffer.commit"})
             await self._connection.send({"type": "response.create"})
-        except asyncio.CancelledError:
-            raise
         except Exception as err:
             await self._notify_error(err)
 
@@ -112,8 +109,6 @@ class OpenAIRealtimeClient:
             if self._connection is None:
                 return
             await self._connection.send({"type": "input_audio_buffer.clear"})
-        except asyncio.CancelledError:
-            raise
         except Exception as err:
             await self._notify_error(err)
 
@@ -124,8 +119,6 @@ class OpenAIRealtimeClient:
             if self._current_response_id:
                 self._discarded_response_ids.add(self._current_response_id)
             await self._connection.send({"type": "response.cancel"})
-        except asyncio.CancelledError:
-            raise
         except Exception as err:
             await self._notify_error(err)
 
@@ -215,8 +208,6 @@ class OpenAIRealtimeClient:
                     reason, message = classify_realtime_error(event)
                     _LOGGER.error("Realtime error (%s): %s", reason, message)
                     await self._on_error(reason, message)
-        except asyncio.CancelledError:
-            raise
         except Exception:
             _LOGGER.exception("Realtime event reader crashed")
             reason, message = classify_realtime_error("Realtime event reader crashed")

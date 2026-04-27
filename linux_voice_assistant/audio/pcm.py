@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-
 SUPPORTED_PCM_SAMPLE_RATES = {16000, 24000, 48000}
 
 

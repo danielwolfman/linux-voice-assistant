@@ -7,15 +7,21 @@ from typing import Protocol
 
 class AssistantPlaybackSink(Protocol):
     @property
-    def is_playing(self) -> bool: ...
+    def is_playing(self) -> bool:
+        raise NotImplementedError
 
     @property
-    def pending_samples(self) -> int: ...
+    def pending_samples(self) -> int:
+        raise NotImplementedError
 
-    def set_volume(self, volume: float) -> None: ...
+    def set_volume(self, volume: float) -> None:
+        raise NotImplementedError
 
-    def add_data(self, data: bytes) -> None: ...
+    def add_data(self, data: bytes) -> None:
+        raise NotImplementedError
 
-    def stop(self) -> None: ...
+    def stop(self) -> None:
+        raise NotImplementedError
 
-    def close(self) -> None: ...
+    def close(self) -> None:
+        raise NotImplementedError

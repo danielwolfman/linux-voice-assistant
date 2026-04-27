@@ -114,8 +114,6 @@ class HomeAssistantSettingsListener:
         while self._running:
             try:
                 await self._listen_once()
-            except asyncio.CancelledError:
-                raise
             except Exception:
                 _LOGGER.exception("Home Assistant settings listener disconnected, retrying")
                 await asyncio.sleep(2.0)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Optional
+from typing import Any, Callable, Coroutine, Optional
 
 from aiohttp import WSMsgType, web
 
@@ -14,8 +14,8 @@ from .protocol import ProtocolError, build_control, negotiate_audio_format, pars
 
 _LOGGER = logging.getLogger(__name__)
 
-SendJson = Callable[[dict], Awaitable[None]]
-SendBinary = Callable[[bytes], Awaitable[None]]
+SendJson = Callable[[dict], Coroutine[Any, Any, None]]
+SendBinary = Callable[[bytes], Coroutine[Any, Any, None]]
 
 
 @dataclass(frozen=True)

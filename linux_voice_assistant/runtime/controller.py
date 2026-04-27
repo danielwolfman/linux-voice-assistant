@@ -17,8 +17,8 @@ from ..ha_tools.activity_logger import HomeAssistantActivityLogger
 from ..ha_tools.client import HomeAssistantToolBridge
 from ..ha_tools.settings_listener import HomeAssistantSettingsListener
 from ..models import ServerState
-from ..realtime.client import OpenAIRealtimeClient
 from ..mpv_player import MpvMediaPlayer
+from ..realtime.client import OpenAIRealtimeClient
 from ..tools.registry import ToolRegistry
 from ..tools.web_search import WebSearchTool
 
@@ -150,7 +150,13 @@ class SessionController:
         self._schedule(self._interrupt_and_listen())
 
     def is_microphone_blocked(self) -> bool:
-        return self.state.muted or self._error_sound_active or (time.monotonic() < self._mic_suppressed_until) or self.phase in {SessionPhase.PLAYING_OUTPUT, SessionPhase.TOOL_CALL} or self._audio_player.is_playing
+        return (
+            self.state.muted
+            or self._error_sound_active
+            or (time.monotonic() < self._mic_suppressed_until)
+            or self.phase in {SessionPhase.PLAYING_OUTPUT, SessionPhase.TOOL_CALL}
+            or self._audio_player.is_playing
+        )
 
     async def shutdown(self) -> None:
         if self._response_delay_task is not None:
