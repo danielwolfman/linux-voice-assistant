@@ -114,6 +114,19 @@ class SatelliteSessionHandler:
 SessionFactory = Callable[[PcmFormat, SendJson, SendBinary], SatelliteSessionHandler]
 
 
+def create_session_factory(make_controller: Callable[[RemotePlaybackSink, PcmFormat], object], *, output_sample_rate: int) -> SessionFactory:
+    def factory(selected_format: PcmFormat, send_json: SendJson, send_binary: SendBinary) -> SatelliteSessionHandler:
+        sink = RemotePlaybackSink(
+            selected_input_format=selected_format,
+            output_sample_rate=output_sample_rate,
+            send_json=send_json,
+            send_binary=send_binary,
+        )
+        return SatelliteSessionHandler(make_controller(sink, selected_format))
+
+    return factory
+
+
 def create_app(session_factory: SessionFactory, *, path: str = "/vape") -> web.Application:
     app = web.Application()
 

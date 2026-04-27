@@ -47,6 +47,14 @@ async def main() -> None:
                 print(f"[{idx}] {device['name']}")
         return
 
+    if config.frontend == "vape-server":
+        await run_vape_server_frontend(config)
+    else:
+        await run_local_frontend(config, args)
+
+
+async def run_local_frontend(config: AppConfig, args) -> None:
+    del args
     logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO)
     _LOGGER.debug("Loaded config: %s", config)
     logging.getLogger("openai.resources.realtime.realtime").setLevel(logging.INFO)
@@ -129,6 +137,102 @@ async def main() -> None:
         state.audio_queue.put_nowait(None)
         await controller.shutdown()
         process_audio_thread.join()
+
+
+async def run_vape_server_frontend(config: AppConfig) -> None:
+    from aiohttp import web
+
+    from .vape.server import create_app, create_session_factory
+
+    logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO)
+    _LOGGER.debug("Loaded config: %s", config)
+    logging.getLogger("openai.resources.realtime.realtime").setLevel(logging.INFO)
+    logging.getLogger("websockets.client").setLevel(logging.INFO)
+
+    config.download_dir.mkdir(parents=True, exist_ok=True)
+    preferences = _load_preferences(config.preferences_file)
+    initial_volume = preferences.volume if preferences.volume is not None else 1.0
+    preferences.volume = max(0.0, min(1.0, float(initial_volume)))
+
+    loop = asyncio.get_running_loop()
+
+    def make_controller(audio_player, selected_format):
+        state = build_server_state_for_vape(config, preferences)
+        controller = SessionController(
+            state=state,
+            config=config,
+            loop=loop,
+            audio_player=audio_player,
+            input_sample_rate=selected_format.sample_rate,
+        )
+        state.satellite = controller
+        loop.create_task(controller.start())
+        return controller
+
+    app = create_app(
+        create_session_factory(make_controller, output_sample_rate=config.vape_output_sample_rate),
+        path=config.vape_server_path,
+    )
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, config.vape_server_host, config.vape_server_port)
+    await site.start()
+    _LOGGER.info("VAPE satellite server listening on ws://%s:%s%s", config.vape_server_host, config.vape_server_port, config.vape_server_path)
+    try:
+        await asyncio.Event().wait()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        await runner.cleanup()
+
+
+class NullStopWord:
+    id = "stop"
+
+
+def build_server_state_for_vape(config: AppConfig, preferences: Preferences) -> ServerState:
+    network_interface = get_default_interface() or "unknown"
+    mac_address = get_mac_address(interface=network_interface) or get_mac_address() or "00:00:00:00:00:00"
+    mac_address_clean = mac_address.replace(":", "").lower()
+    friendly_name = config.name or f"LVA VAPE Server - {mac_address_clean}"
+    device_name = f"lva-vape-server-{mac_address_clean}"
+    initial_volume = preferences.volume if preferences.volume is not None else 1.0
+    initial_volume = max(0.0, min(1.0, float(initial_volume)))
+    music_player = MpvMediaPlayer()
+    tts_player = MpvMediaPlayer()
+    initial_volume_percent = int(round(initial_volume * 100))
+    music_player.set_volume(initial_volume_percent)
+    tts_player.set_volume(initial_volume_percent)
+
+    return ServerState(
+        name=device_name,
+        friendly_name=friendly_name,
+        network_interface=network_interface,
+        mac_address=mac_address,
+        ip_address="127.0.0.1",
+        version=get_version(),
+        esphome_version="vape-server",
+        audio_queue=Queue(),
+        entities=[],
+        available_wake_words={},
+        wake_words={},
+        active_wake_words=set(),
+        stop_word=NullStopWord(),  # type: ignore[arg-type]
+        music_player=music_player,
+        tts_player=tts_player,
+        wakeup_sound=config.wakeup_sound or "",
+        timer_finished_sound="",
+        processing_sound=config.processing_sound or "",
+        mute_sound="",
+        unmute_sound="",
+        preferences=preferences,
+        preferences_path=config.preferences_file,
+        download_dir=config.download_dir,
+        refractory_seconds=config.refractory_seconds,
+        output_only=False,
+        volume=initial_volume,
+        timer_max_ring_seconds=0.0,
+    )
 
 
 def _resolve_microphone(audio_input_device: Optional[str]):

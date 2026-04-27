@@ -3,7 +3,7 @@ import asyncio
 from aiohttp.test_utils import TestClient, TestServer
 
 from linux_voice_assistant.audio.pcm import PcmFormat
-from linux_voice_assistant.vape.server import RemotePlaybackSink, SatelliteSessionHandler, create_app
+from linux_voice_assistant.vape.server import RemotePlaybackSink, SatelliteSessionHandler, create_app, create_session_factory
 
 
 class FakeController:
@@ -90,3 +90,26 @@ async def _test_remote_playback_sink_sends_start_audio_and_stop():
     assert len(sent_binary[0]) == 8
     assert sink.pending_samples == 0
     assert not sink.is_playing
+
+
+def test_create_session_factory_builds_remote_playback_sink():
+    created = {}
+
+    def make_controller(audio_player, selected_format):
+        created["audio_player"] = audio_player
+        created["selected_format"] = selected_format
+        return FakeController()
+
+    factory = create_session_factory(make_controller, output_sample_rate=24000)
+
+    async def send_json(payload):
+        created.setdefault("json", []).append(payload)
+
+    async def send_binary(payload):
+        created.setdefault("binary", []).append(payload)
+
+    handler = factory(PcmFormat(codec="pcm_s16le", sample_rate=24000, channels=1), send_json, send_binary)
+
+    assert isinstance(handler, SatelliteSessionHandler)
+    assert isinstance(created["audio_player"], RemotePlaybackSink)
+    assert created["selected_format"].sample_rate == 24000
