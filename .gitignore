@@ -18,6 +18,7 @@ venv/
 /dist/
 /preferences.json
 /local/
+.worktrees/
 
 # Docker
 .env
