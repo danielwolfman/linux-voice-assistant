@@ -423,9 +423,10 @@ class SessionController:
         await self._close_session_to_idle(play_end_sound=True)
 
     async def _handle_timeout(self) -> None:
+        _LOGGER.info("Session timed out after user silence; closing quietly")
         self._set_phase(SessionPhase.SESSION_TIMEOUT)
         self._reset_response_chain_state()
-        await self._close_session_to_idle(play_end_sound=True)
+        await self._close_session_to_idle(play_end_sound=False)
 
     def _maybe_timeout(self, now: float) -> None:
         if self._session_deadline is None or self.phase not in {SessionPhase.STREAMING_INPUT, SessionPhase.IDLE}:

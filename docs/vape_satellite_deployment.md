@@ -202,4 +202,4 @@ Flash each VAPE over USB-C with ESPHome. Because firmware uses `name_add_mac_suf
 6. Backend logs Realtime response activity.
 7. VAPE plays streamed assistant audio.
 8. Home Assistant tool and `web_search` calls play the thinking cue while running.
-9. Session timeout or end-session returns VAPE to idle and plays the idle cue.
+9. User silence timeout returns VAPE to idle quietly; explicit end-session returns VAPE to idle after the assistant reply.

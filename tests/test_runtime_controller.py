@@ -1,3 +1,4 @@
+import asyncio
 import numpy as np
 from types import SimpleNamespace
 
@@ -245,3 +246,22 @@ def test_vape_turn_end_uses_higher_threshold_than_speech_start():
 
     assert controller.phase == SessionPhase.SESSION_STARTING
     assert controller._realtime.commits == 1
+
+
+def test_session_timeout_closes_quietly_without_end_sound():
+    controller = object.__new__(SessionController)
+    calls = []
+
+    controller._set_phase = lambda phase: calls.append(("phase", phase))
+    controller._reset_response_chain_state = lambda: calls.append(("reset", None))
+
+    async def close_session_to_idle(*, play_end_sound: bool) -> None:
+        calls.append(("close", play_end_sound))
+
+    controller._close_session_to_idle = close_session_to_idle
+
+    asyncio.run(controller._handle_timeout())
+
+    assert ("phase", SessionPhase.SESSION_TIMEOUT) in calls
+    assert ("reset", None) in calls
+    assert ("close", False) in calls
