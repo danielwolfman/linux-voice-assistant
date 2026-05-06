@@ -25,6 +25,7 @@ from ..tools.web_search import WebSearchTool
 
 _LOGGER = logging.getLogger(__name__)
 _INPUT_PREROLL_SECONDS = 1.2
+_VAPE_END_VAD_THRESHOLD_FLOOR = 0.03
 
 
 class SessionPhase(str, Enum):
@@ -125,9 +126,15 @@ class SessionController:
             return
 
         level = pcm16_rms(audio_chunk)
+        end_threshold = _turn_end_threshold(self.config)
         if now - self._last_audio_level_log_at >= 1.0:
             self._last_audio_level_log_at = now
-            _LOGGER.info("Input audio level rms=%.4f threshold=%.4f", level, self.config.vad_threshold)
+            _LOGGER.info(
+                "Input audio level rms=%.4f start_threshold=%.4f end_threshold=%.4f",
+                level,
+                self.config.vad_threshold,
+                end_threshold,
+            )
         if not self._turn_open:
             if level < self.config.vad_threshold:
                 self._remember_input_preroll(audio_chunk)
@@ -138,7 +145,7 @@ class SessionController:
             _LOGGER.info("Speech detected, opening turn (rms=%.4f threshold=%.4f)", level, self.config.vad_threshold)
             self._flush_input_preroll()
         else:
-            if level >= self.config.vad_threshold:
+            if level >= end_threshold:
                 self._last_voice_at = now
 
         self._session_deadline = now + self.config.session_timeout_seconds
@@ -147,7 +154,7 @@ class SessionController:
         if (
             self._turn_open
             and self._last_voice_at is not None
-            and level < self.config.vad_threshold
+            and level < end_threshold
             and (now - self._last_voice_at) >= self.config.end_silence_seconds
             and self._speech_started_at is not None
             and (now - self._speech_started_at) >= self.config.min_speech_seconds
@@ -156,7 +163,7 @@ class SessionController:
             self._speech_started_at = None
             self._last_voice_at = None
             self._set_phase(SessionPhase.SESSION_STARTING)
-            _LOGGER.info("Committing turn after silence (rms=%.4f)", level)
+            _LOGGER.info("Committing turn after silence (rms=%.4f threshold=%.4f)", level, end_threshold)
             self._play_processing_sound()
             self._schedule(self._realtime.commit_turn())
 
@@ -586,6 +593,13 @@ def pcm16_rms(audio_chunk: bytes) -> float:
         return 0.0
     normalized = samples.astype(np.float32) / 32768.0
     return float(np.sqrt(np.mean(np.square(normalized))))
+
+
+def _turn_end_threshold(config: AppConfig) -> float:
+    threshold = float(config.vad_threshold)
+    if getattr(config, "frontend", None) == "vape-server":
+        return max(threshold, _VAPE_END_VAD_THRESHOLD_FLOOR)
+    return threshold
 
 
 def _looks_like_question(transcript: str) -> bool:

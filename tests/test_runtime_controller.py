@@ -158,19 +158,25 @@ def test_prepare_vape_server_config_keeps_backend_cues(tmp_path):
 class FakeRealtimeInput:
     def __init__(self):
         self.appended = []
+        self.commits = 0
 
     async def append_input_audio(self, audio_chunk: bytes, source_rate: int) -> None:
         self.appended.append((audio_chunk, source_rate))
+
+    async def commit_turn(self) -> None:
+        self.commits += 1
 
 
 def _controller_for_vad_test() -> SessionController:
     controller = object.__new__(SessionController)
     controller.state = SimpleNamespace(muted=False)
     controller.config = SimpleNamespace(
+        frontend="local",
         vad_threshold=0.1,
         end_silence_seconds=99.0,
         min_speech_seconds=0.0,
         session_timeout_seconds=20.0,
+        processing_sound=None,
     )
     controller.phase = SessionPhase.STREAMING_INPUT
     controller._input_sample_rate = 16000
@@ -181,6 +187,9 @@ def _controller_for_vad_test() -> SessionController:
     controller._last_voice_at = None
     controller._last_audio_level_log_at = 0.0
     controller._wakeup_in_progress = False
+    controller._last_remote_state = None
+    controller._processing_sound_active = False
+    controller._audio_player = SimpleNamespace(set_remote_state=lambda state: None)
     controller._realtime = FakeRealtimeInput()
     controller._schedule = lambda coroutine: __import__("asyncio").run(coroutine)
     controller._init_input_audio_buffers()
@@ -215,3 +224,24 @@ def test_wakeup_startup_audio_is_buffered_until_streaming_begins():
     controller.handle_audio(current)
 
     assert controller._realtime.appended == [(early, 16000), (current, 16000)]
+
+
+def test_vape_turn_end_uses_higher_threshold_than_speech_start():
+    controller = _controller_for_vad_test()
+    controller.config.frontend = "vape-server"
+    controller.config.vad_threshold = 0.014
+    controller.config.end_silence_seconds = 0.5
+    speech = (np.ones(320, dtype=np.float32) * 0.08 * 32767).astype("<i2").tobytes()
+    room_noise = (np.ones(320, dtype=np.float32) * 0.02 * 32767).astype("<i2").tobytes()
+
+    controller.handle_audio(speech)
+    assert controller._turn_open
+    assert controller._last_voice_at is not None
+    assert controller._speech_started_at is not None
+    controller._last_voice_at -= 1.0
+    controller._speech_started_at -= 1.0
+
+    controller.handle_audio(room_noise)
+
+    assert controller.phase == SessionPhase.SESSION_STARTING
+    assert controller._realtime.commits == 1
