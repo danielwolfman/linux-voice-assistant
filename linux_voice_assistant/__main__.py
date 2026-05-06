@@ -15,8 +15,6 @@ from queue import Queue
 from typing import Dict, List, Optional, Set, Union
 
 import numpy as np
-import soundcard as sc
-import sounddevice as sd  # type: ignore[import-untyped]
 from getmac import get_mac_address  # type: ignore
 from pymicro_wakeword import MicroWakeWord, MicroWakeWordFeatures
 from pyopen_wakeword import OpenWakeWord, OpenWakeWordFeatures
@@ -34,6 +32,8 @@ async def main() -> None:
     config, args = load_config()
 
     if args.list_input_devices:
+        import soundcard as sc
+
         print("Audio input devices:")
         print("=" * 19)
         for idx, mic in enumerate(sc.all_microphones()):
@@ -41,6 +41,8 @@ async def main() -> None:
         return
 
     if args.list_output_devices:
+        import sounddevice as sd  # type: ignore[import-untyped]
+
         print("Audio output devices:")
         print("=" * 20)
         for idx, device in enumerate(sd.query_devices()):
@@ -247,6 +249,8 @@ def build_server_state_for_vape(config: AppConfig, preferences: Preferences) -> 
 
 
 def _resolve_microphone(audio_input_device: Optional[str]):
+    import soundcard as sc
+
     if audio_input_device is None:
         return sc.default_microphone()
 
