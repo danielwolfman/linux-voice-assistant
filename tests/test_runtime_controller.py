@@ -1,11 +1,12 @@
 import numpy as np
+from types import SimpleNamespace
 
 from linux_voice_assistant.audio.pcm import resample_pcm16_mono
 from linux_voice_assistant.config import AppConfig
 from linux_voice_assistant.frontend import AssistantPlaybackSink
 from linux_voice_assistant.__main__ import _prepare_vape_server_config
 from linux_voice_assistant.realtime.client import _extract_assistant_transcript, classify_realtime_error
-from linux_voice_assistant.runtime.controller import _estimate_realtime_cost_usd, _looks_like_question, pcm16_rms
+from linux_voice_assistant.runtime.controller import SessionController, SessionPhase, _estimate_realtime_cost_usd, _looks_like_question, pcm16_rms
 
 
 def test_pcm16_rms_detects_signal_level():
@@ -152,3 +153,65 @@ def test_prepare_vape_server_config_keeps_backend_cues(tmp_path):
     assert prepared.session_end_sound is None
     assert prepared.processing_sound == "sounds/processing.wav"
     assert prepared.tool_call_sound == "sounds/tool_call_processing.wav"
+
+
+class FakeRealtimeInput:
+    def __init__(self):
+        self.appended = []
+
+    async def append_input_audio(self, audio_chunk: bytes, source_rate: int) -> None:
+        self.appended.append((audio_chunk, source_rate))
+
+
+def _controller_for_vad_test() -> SessionController:
+    controller = object.__new__(SessionController)
+    controller.state = SimpleNamespace(muted=False)
+    controller.config = SimpleNamespace(
+        vad_threshold=0.1,
+        end_silence_seconds=99.0,
+        min_speech_seconds=0.0,
+        session_timeout_seconds=20.0,
+    )
+    controller.phase = SessionPhase.STREAMING_INPUT
+    controller._input_sample_rate = 16000
+    controller._session_deadline = None
+    controller._mic_suppressed_until = 0.0
+    controller._turn_open = False
+    controller._speech_started_at = None
+    controller._last_voice_at = None
+    controller._last_audio_level_log_at = 0.0
+    controller._wakeup_in_progress = False
+    controller._realtime = FakeRealtimeInput()
+    controller._schedule = lambda coroutine: __import__("asyncio").run(coroutine)
+    controller._init_input_audio_buffers()
+    return controller
+
+
+def test_vad_flushes_preroll_audio_when_speech_starts():
+    controller = _controller_for_vad_test()
+    quiet = (np.ones(320, dtype=np.float32) * 0.03 * 32767).astype("<i2").tobytes()
+    loud = (np.ones(320, dtype=np.float32) * 0.30 * 32767).astype("<i2").tobytes()
+
+    controller.handle_audio(quiet)
+    assert controller._realtime.appended == []
+
+    controller.handle_audio(loud)
+
+    assert controller._realtime.appended == [(quiet, 16000), (loud, 16000)]
+
+
+def test_wakeup_startup_audio_is_buffered_until_streaming_begins():
+    controller = _controller_for_vad_test()
+    early = (np.ones(320, dtype=np.float32) * 0.25 * 32767).astype("<i2").tobytes()
+    current = (np.ones(320, dtype=np.float32) * 0.30 * 32767).astype("<i2").tobytes()
+    controller.phase = SessionPhase.IDLE
+    controller._wakeup_in_progress = True
+
+    controller.handle_audio(early)
+    assert controller._realtime.appended == []
+
+    controller.phase = SessionPhase.STREAMING_INPUT
+    controller._wakeup_in_progress = False
+    controller.handle_audio(current)
+
+    assert controller._realtime.appended == [(early, 16000), (current, 16000)]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from enum import Enum
 from pathlib import Path
 from typing import Optional, cast
@@ -23,6 +24,7 @@ from ..tools.registry import ToolRegistry
 from ..tools.web_search import WebSearchTool
 
 _LOGGER = logging.getLogger(__name__)
+_INPUT_PREROLL_SECONDS = 1.2
 
 
 class SessionPhase(str, Enum):
@@ -58,6 +60,8 @@ class SessionController:
         self._turn_open = False
         self._speech_started_at: Optional[float] = None
         self._last_voice_at: Optional[float] = None
+        self._wakeup_in_progress = False
+        self._init_input_audio_buffers()
         self._last_audio_level_log_at = 0.0
         self._processing_sound_active = False
         self._tool_sound_active = False
@@ -111,7 +115,11 @@ class SessionController:
         now = time.monotonic()
         self._maybe_timeout(now)
 
-        if self.phase != SessionPhase.STREAMING_INPUT or self.state.muted:
+        if self.state.muted:
+            return
+        if self.phase != SessionPhase.STREAMING_INPUT:
+            if self._wakeup_in_progress:
+                self._remember_input_preroll(audio_chunk)
             return
         if now < self._mic_suppressed_until:
             return
@@ -122,11 +130,13 @@ class SessionController:
             _LOGGER.info("Input audio level rms=%.4f threshold=%.4f", level, self.config.vad_threshold)
         if not self._turn_open:
             if level < self.config.vad_threshold:
+                self._remember_input_preroll(audio_chunk)
                 return
             self._turn_open = True
             self._speech_started_at = now
             self._last_voice_at = now
             _LOGGER.info("Speech detected, opening turn (rms=%.4f threshold=%.4f)", level, self.config.vad_threshold)
+            self._flush_input_preroll()
         else:
             if level >= self.config.vad_threshold:
                 self._last_voice_at = now
@@ -152,6 +162,8 @@ class SessionController:
 
     def wakeup(self, wake_word) -> None:
         wake_word_phrase = getattr(wake_word, "wake_word", getattr(wake_word, "id", "wake"))
+        self._wakeup_in_progress = True
+        self._clear_input_preroll()
         self._schedule(self._handle_wakeup(str(wake_word_phrase)))
 
     def stop(self) -> None:
@@ -260,9 +272,11 @@ class SessionController:
         await self._reset_turn(clear_remote_buffer=True)
         self._reset_response_chain_state()
         self._set_phase(SessionPhase.STREAMING_INPUT)
+        self._wakeup_in_progress = False
         self._session_deadline = time.monotonic() + self.config.session_timeout_seconds
 
     async def _interrupt_and_listen(self) -> None:
+        self._wakeup_in_progress = False
         self._reset_response_chain_state()
         self._stop_processing_sound()
         self._stop_tool_sound()
@@ -278,8 +292,35 @@ class SessionController:
         self._turn_open = False
         self._speech_started_at = None
         self._last_voice_at = None
+        if not self._wakeup_in_progress:
+            self._clear_input_preroll()
         if clear_remote_buffer:
             await self._realtime.clear_input_audio()
+
+    def _init_input_audio_buffers(self) -> None:
+        self._input_preroll: deque[bytes] = deque()
+        self._input_preroll_bytes = 0
+        self._input_preroll_limit_bytes = int(self._input_sample_rate * 2 * _INPUT_PREROLL_SECONDS)
+
+    def _remember_input_preroll(self, audio_chunk: bytes) -> None:
+        if not audio_chunk:
+            return
+        self._input_preroll.append(audio_chunk)
+        self._input_preroll_bytes += len(audio_chunk)
+        while self._input_preroll_bytes > self._input_preroll_limit_bytes and self._input_preroll:
+            removed = self._input_preroll.popleft()
+            self._input_preroll_bytes -= len(removed)
+
+    def _flush_input_preroll(self) -> None:
+        while self._input_preroll:
+            audio_chunk = self._input_preroll.popleft()
+            self._input_preroll_bytes -= len(audio_chunk)
+            self._schedule(self._realtime.append_input_audio(audio_chunk, source_rate=self._input_sample_rate))
+        self._input_preroll_bytes = 0
+
+    def _clear_input_preroll(self) -> None:
+        self._input_preroll.clear()
+        self._input_preroll_bytes = 0
 
     async def _on_audio_delta(self, audio: bytes) -> None:
         if not self._logged_response_audio:
@@ -344,6 +385,7 @@ class SessionController:
             self._audio_player.stop()
             self.state.tts_player.stop()
             await self._realtime.close()
+            self._wakeup_in_progress = False
             await self._reset_turn(clear_remote_buffer=False)
             self.state.active_wake_words.discard(self.state.stop_word.id)
             self._session_deadline = None
@@ -448,6 +490,7 @@ class SessionController:
         self._audio_player.stop()
         self.state.tts_player.stop()
         await self._realtime.close()
+        self._wakeup_in_progress = False
         await self._reset_turn(clear_remote_buffer=False)
         self.state.active_wake_words.discard(self.state.stop_word.id)
         self._session_deadline = None
