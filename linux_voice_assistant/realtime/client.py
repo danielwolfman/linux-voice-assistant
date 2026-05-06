@@ -139,13 +139,20 @@ class OpenAIRealtimeClient:
         self._discarded_response_ids.clear()
 
     async def update_session_settings(self, *, model: Optional[str] = None, voice: Optional[str] = None, instructions: Optional[str] = None) -> None:
+        needs_reconnect = False
         if model is not None:
+            needs_reconnect = model != self._model
             self._model = model
         if voice is not None:
+            needs_reconnect = needs_reconnect or voice != self._voice
             self._voice = voice
         if instructions is not None:
             self._instructions = instructions
         if self._connection is None:
+            return
+        if needs_reconnect:
+            _LOGGER.info("Realtime session will reconnect to apply model/voice change")
+            await self.close()
             return
 
         session_config: Any = self._build_session_config()
