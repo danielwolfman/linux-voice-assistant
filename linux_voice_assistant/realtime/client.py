@@ -75,6 +75,7 @@ class OpenAIRealtimeClient:
             self._connection = await self._connection_context.__aenter__()  # pylint: disable=unnecessary-dunder-call
             session_config: Any = self._build_session_config()
             await self._connection.session.update(session=session_config)
+            _LOGGER.info("Realtime session configured: model=%s voice=%s", self._model, self._voice)
             self._reader_task = asyncio.create_task(self._read_events())
         except Exception as err:
             await self._notify_error(err)
@@ -100,7 +101,7 @@ class OpenAIRealtimeClient:
             if self._connection is None:
                 return
             await self._connection.send({"type": "input_audio_buffer.commit"})
-            await self._connection.send({"type": "response.create"})
+            await self._connection.send(self._build_response_create_event())
         except Exception as err:
             await self._notify_error(err)
 
@@ -146,6 +147,7 @@ class OpenAIRealtimeClient:
         if voice is not None:
             needs_reconnect = needs_reconnect or voice != self._voice
             self._voice = voice
+            _LOGGER.info("Realtime voice setting updated: voice=%s", self._voice)
         if instructions is not None:
             self._instructions = instructions
         if self._connection is None:
@@ -208,7 +210,20 @@ class OpenAIRealtimeClient:
                     self._discarded_response_ids.discard(response_id)
                     if response_id == self._current_response_id:
                         self._current_response_id = None
+                    response_voice = str(getattr(response, "voice", "") or self._voice)
+                    _LOGGER.info("Realtime response completed with voice=%s", response_voice)
                     await self._on_response_done(response_id, status, usage, transcript, model)
+                    continue
+
+                if event_type == "session.updated":
+                    session = getattr(event, "session", None)
+                    effective_voice = _lookup_path(session, ("audio", "output", "voice")) or _lookup(session, "voice")
+                    effective_model = _lookup(session, "model")
+                    _LOGGER.info(
+                        "Realtime session updated: model=%s voice=%s",
+                        effective_model or self._model,
+                        effective_voice or self._voice,
+                    )
                     continue
 
                 if event_type == "error":
@@ -248,7 +263,7 @@ class OpenAIRealtimeClient:
                 },
             }
         )
-        await self._connection.send({"type": "response.create"})
+        await self._connection.send(self._build_response_create_event())
         await self._on_tool_call_finished(tool_name, result)
 
     def _build_session_config(self) -> dict[str, Any]:
@@ -270,6 +285,20 @@ class OpenAIRealtimeClient:
             },
             "tools": self._tools.tool_definitions() + [_end_session_tool_definition()],
             "tool_choice": "auto",
+        }
+
+    def _build_response_create_event(self) -> dict[str, Any]:
+        return {
+            "type": "response.create",
+            "response": {
+                "output_modalities": ["audio"],
+                "audio": {
+                    "output": {
+                        "voice": self._voice,
+                        "format": {"type": "audio/pcm", "rate": 24000},
+                    },
+                },
+            },
         }
 
     async def _notify_error(self, error: Any) -> None:
@@ -311,6 +340,15 @@ def _lookup(value: Any, key: str) -> Any:
     if isinstance(value, dict):
         return value.get(key)
     return getattr(value, key, None)
+
+
+def _lookup_path(value: Any, path: tuple[str, ...]) -> Any:
+    current = value
+    for key in path:
+        current = _lookup(current, key)
+        if current is None:
+            return None
+    return current
 
 
 def _as_int(value: Any) -> int:

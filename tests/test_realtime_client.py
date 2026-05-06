@@ -49,3 +49,23 @@ def test_instruction_change_updates_active_realtime_session():
         assert updated == [{"instructions": "new"}]
 
     asyncio.run(run())
+
+
+def test_response_create_event_includes_current_voice():
+    client = object.__new__(OpenAIRealtimeClient)
+    client._voice = "cedar"
+
+    event = client._build_response_create_event()
+
+    assert event == {
+        "type": "response.create",
+        "response": {
+            "output_modalities": ["audio"],
+            "audio": {
+                "output": {
+                    "voice": "cedar",
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                },
+            },
+        },
+    }
