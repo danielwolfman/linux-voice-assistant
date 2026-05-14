@@ -1,3 +1,4 @@
+using System.Media;
 using LinuxVoiceAssistant.WindowsFront.Audio;
 using LinuxVoiceAssistant.WindowsFront.Hotkeys;
 using LinuxVoiceAssistant.WindowsFront.Protocol;
@@ -19,6 +20,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly SynchronizationContext _uiContext;
     private readonly VapeClient _client;
     private AppSettings _settings;
+    private AssistantState _state = AssistantState.Disconnected;
 
     public TrayApplicationContext(ConfigStore configStore)
     {
@@ -85,6 +87,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         try
         {
             await _client.WakeOrInterruptAsync();
+            PlayWakeSound();
         }
         catch (Exception ex)
         {
@@ -136,10 +139,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void UpdateState(AssistantState state)
     {
+        var previousState = _state;
+        _state = state;
         _stateItem.Text = StateLabel(state);
         _notifyIcon.Text = $"Windows Voice Front - {_stateItem.Text}";
         _wakeItem.Enabled = state != AssistantState.Muted;
         _muteItem.Checked = state == AssistantState.Muted || _client.LocalMuted;
+
+        if (IsActiveState(previousState) && IsDownState(state))
+        {
+            PlayWakeDownSound();
+        }
     }
 
     private void ShowError(string message)
@@ -167,5 +177,39 @@ internal sealed class TrayApplicationContext : ApplicationContext
             AssistantState.Error => "Error",
             _ => "Unknown",
         };
+    }
+
+    private static bool IsActiveState(AssistantState state)
+    {
+        return state is AssistantState.Listening or AssistantState.Thinking or AssistantState.Speaking;
+    }
+
+    private static bool IsDownState(AssistantState state)
+    {
+        return state is AssistantState.Idle or AssistantState.Muted or AssistantState.Disconnected or AssistantState.Error;
+    }
+
+    private static void PlayWakeSound()
+    {
+        try
+        {
+            SystemSounds.Asterisk.Play();
+        }
+        catch
+        {
+            // System sound playback is best effort and should never block wake.
+        }
+    }
+
+    private static void PlayWakeDownSound()
+    {
+        try
+        {
+            SystemSounds.Exclamation.Play();
+        }
+        catch
+        {
+            // System sound playback is best effort and should never affect state.
+        }
     }
 }

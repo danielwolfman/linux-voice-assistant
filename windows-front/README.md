@@ -15,6 +15,7 @@ ws://192.168.1.196:8765/vape
 - global hotkey wake/interruption
 - tray double-click wake/interruption
 - local-only app mute
+- built-in Windows wake and session-down cue sounds
 - configurable microphone, speaker, sample rate, frame size, and hotkey
 - PCM16 mono microphone uplink while the backend is listening
 - PCM16 mono assistant playback downlink
