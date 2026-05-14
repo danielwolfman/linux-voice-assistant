@@ -191,7 +191,7 @@ class CodexJobManager:
 
     def _create_job(self, *, task: str, workspace: Path, execution_mode: str, origin_session_id: Optional[str]) -> CodexJob:
         job_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
-        job_dir = self._jobs_dir / job_id
+        job_dir = (self._jobs_dir / job_id).expanduser().resolve()
         job_dir.mkdir(parents=True, exist_ok=False)
         return CodexJob(
             id=job_id,
@@ -221,11 +221,13 @@ class CodexJobManager:
         (job.job_dir / "command.txt").write_text(" ".join(shlex.quote(part) for part in command), encoding="utf-8")
 
         try:
+            process_env = _codex_process_env()
             job._process = await asyncio.create_subprocess_exec(
                 *command,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=process_env,
             )
             assert job._process.stdin is not None
             job._process.stdin.write(job.task.encode("utf-8"))
@@ -265,14 +267,14 @@ class CodexJobManager:
         if job.execution_mode == "host":
             return [
                 self._host_command,
+                "--ask-for-approval",
+                "never",
                 "exec",
                 "--json",
                 "--output-last-message",
                 os.fspath(job.final_output_path),
                 "--sandbox",
                 "workspace-write",
-                "--ask-for-approval",
-                "never",
                 "--skip-git-repo-check",
                 "-C",
                 os.fspath(job.workspace),
@@ -289,9 +291,6 @@ class CodexJobManager:
             "-e",
             "HOME=/codex-home",
         ]
-        for env_name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT"):
-            if os.getenv(env_name):
-                command.extend(["-e", env_name])
         command.extend(
             [
                 "-v",
@@ -304,14 +303,14 @@ class CodexJobManager:
                 "/workspace",
                 self._docker_image,
                 "codex",
+                "--ask-for-approval",
+                "never",
                 "exec",
                 "--json",
                 "--output-last-message",
                 "/job/final.txt",
                 "--sandbox",
                 "workspace-write",
-                "--ask-for-approval",
-                "never",
                 "--skip-git-repo-check",
                 "-C",
                 "/workspace",
@@ -470,3 +469,10 @@ def _elapsed_seconds(job: CodexJob) -> float:
     start = job.started_at or job.created_at
     end = job.finished_at or time.time()
     return max(0.0, end - start)
+
+
+def _codex_process_env() -> dict[str, str]:
+    env = dict(os.environ)
+    for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT"):
+        env.pop(key, None)
+    return env

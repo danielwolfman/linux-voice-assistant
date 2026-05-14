@@ -121,7 +121,14 @@ Build the default Docker image on the Linux backend host:
 docker build -t lva-codex-agent:latest -f docker/codex-agent/Dockerfile .
 ```
 
-The Docker runner mounts only the selected workspace, the job log directory, and `codex.host_codex_home`. It runs `codex exec --json` non-interactively and writes the final agent message to the job directory. Host execution is intentionally separate: if the model thinks a task needs host access outside Docker, it should ask the user for explicit confirmation before calling the tool with `execution_mode: host`.
+Log in to Codex as the same Linux user that runs the backend service:
+
+```sh
+/home/YOUR_USER/.local/bin/codex login --device-auth
+/home/YOUR_USER/.local/bin/codex login status
+```
+
+The Docker runner mounts only the selected workspace, the job log directory, and `codex.host_codex_home`. It removes the backend service's OpenAI API environment variables before starting Codex, so Codex uses the mounted ChatGPT/Codex login by default. It runs `codex exec --json` non-interactively and writes the final agent message to the job directory. Host execution is intentionally separate: if the model thinks a task needs host access outside Docker, it should ask the user for explicit confirmation before calling the tool with `execution_mode: host`.
 
 ## Run Manually
 

@@ -52,3 +52,20 @@ def test_codex_manager_accepts_docker_job_and_reports_busy(tmp_path):
         assert started[0].origin_session_id == "session-1"
 
     asyncio.run(run())
+
+
+def test_codex_manager_uses_absolute_job_dir(tmp_path):
+    manager = CodexJobManager(
+        jobs_dir=tmp_path / "relative" / ".." / "jobs",
+        default_workspace=tmp_path,
+        docker_image="lva-codex-agent:latest",
+        host_codex_home=tmp_path / ".codex",
+    )
+
+    job = manager._create_job(task="inspect", workspace=tmp_path, execution_mode="docker", origin_session_id="session-1")
+    command = manager._build_command(job)
+
+    assert job.job_dir.is_absolute()
+    assert f"{job.job_dir}:/job" in command
+    assert "OPENAI_API_KEY" not in command
+    assert command[command.index("codex") + 1 : command.index("codex") + 4] == ["--ask-for-approval", "never", "exec"]
