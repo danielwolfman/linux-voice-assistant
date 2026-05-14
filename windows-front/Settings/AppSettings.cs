@@ -4,7 +4,7 @@ namespace LinuxVoiceAssistant.WindowsFront.Settings;
 
 internal sealed class AppSettings
 {
-    public string ServerUrl { get; set; } = "ws://192.168.1.197:8765/vape";
+    public string ServerUrl { get; set; } = "ws://192.168.1.196:8765/vape";
     public string DeviceId { get; set; } = BuildDefaultDeviceId();
     public int InputDeviceNumber { get; set; } = -1;
     public int OutputDeviceNumber { get; set; } = -1;

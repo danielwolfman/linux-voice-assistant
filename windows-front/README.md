@@ -7,7 +7,7 @@ It keeps the assistant brain on the Linux host and acts as a Windows microphone,
 Default backend URL:
 
 ```text
-ws://192.168.1.197:8765/vape
+ws://192.168.1.196:8765/vape
 ```
 
 ## Scope
