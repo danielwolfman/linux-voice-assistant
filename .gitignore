@@ -20,6 +20,10 @@ venv/
 /local/
 .worktrees/
 
+# .NET
+bin/
+obj/
+
 # Docker
 .env
 version.txt
