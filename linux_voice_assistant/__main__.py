@@ -145,7 +145,8 @@ async def run_local_frontend(config: AppConfig, args) -> None:
 async def run_vape_server_frontend(config: AppConfig) -> None:
     from aiohttp import web
 
-    from .vape.server import create_app, create_session_factory
+    from .tools.codex_agent import CodexJobManager
+    from .vape.server import VoiceSessionRegistry, create_app, create_session_factory
 
     config = _prepare_vape_server_config(config)
     logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO)
@@ -159,8 +160,17 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
     preferences.volume = max(0.0, min(1.0, float(initial_volume)))
 
     loop = asyncio.get_running_loop()
+    voice_sessions = VoiceSessionRegistry()
+    codex_manager = CodexJobManager(
+        jobs_dir=config.codex_jobs_dir,
+        default_workspace=config.codex_workspace_dir,
+        docker_image=config.codex_docker_image,
+        host_codex_home=config.codex_host_codex_home,
+        host_command=config.codex_host_command,
+        completion_callback=voice_sessions.notify_codex_job_finished,
+    )
 
-    def make_controller(audio_player, selected_format):
+    def make_controller(audio_player, selected_format, session_id):
         state = build_server_state_for_vape(config, preferences)
         controller = SessionController(
             state=state,
@@ -168,14 +178,22 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
             loop=loop,
             audio_player=audio_player,
             input_sample_rate=selected_format.sample_rate,
+            codex_manager=codex_manager,
+            session_id=session_id,
         )
         state.satellite = controller
         loop.create_task(controller.start())
         return controller
 
     app = create_app(
-        create_session_factory(make_controller, output_sample_rate=config.vape_output_sample_rate),
+        create_session_factory(
+            make_controller,
+            output_sample_rate=config.vape_output_sample_rate,
+            on_session_started=voice_sessions.register,
+            on_session_activity=voice_sessions.mark_active,
+        ),
         path=config.vape_server_path,
+        on_session_closed=voice_sessions.unregister,
     )
     runner = web.AppRunner(app)
     await runner.setup()
@@ -187,6 +205,7 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        await codex_manager.close()
         await runner.cleanup()
 
 

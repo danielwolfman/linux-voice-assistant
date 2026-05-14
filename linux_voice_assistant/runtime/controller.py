@@ -20,6 +20,7 @@ from ..ha_tools.settings_listener import HomeAssistantSettingsListener
 from ..models import ServerState
 from ..mpv_player import MpvMediaPlayer
 from ..realtime.client import OpenAIRealtimeClient
+from ..tools.codex_agent import CodexAgentTool, CodexJobManager
 from ..tools.registry import ToolRegistry
 from ..tools.web_search import WebSearchTool
 
@@ -48,10 +49,13 @@ class SessionController:
         loop: asyncio.AbstractEventLoop,
         audio_player: Optional[AssistantPlaybackSink] = None,
         input_sample_rate: int = 16000,
+        codex_manager: Optional[CodexJobManager] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         self.state = state
         self.config = config
         self.loop = loop
+        self.session_id = session_id
         self._input_sample_rate = input_sample_rate
         self.phase = SessionPhase.IDLE
         self._session_deadline: Optional[float] = None
@@ -73,11 +77,13 @@ class SessionController:
         self._tool_call_depth = 0
         self._tool_called_in_response_chain = False
         self._end_session_requested = False
+        self._notification_response_active = False
         self._response_delay_task: Optional[asyncio.Task[None]] = None
         self._wakeup_sound_task: Optional[asyncio.Task[None]] = None
         self._ha_tool_bridge = HomeAssistantToolBridge(config.ha_url, config.ha_token, verify_ssl=config.ha_verify_ssl)
         self._activity_logger = HomeAssistantActivityLogger(config.ha_url, config.ha_token, verify_ssl=config.ha_verify_ssl)
-        self._tool_registry = ToolRegistry(self._ha_tool_bridge, WebSearchTool())
+        codex_agent = CodexAgentTool(codex_manager, session_id) if codex_manager is not None else None
+        self._tool_registry = ToolRegistry(self._ha_tool_bridge, WebSearchTool(), codex_agent=codex_agent)
         self._tool_registry.set_enabled_tools(_enabled_tools_from_config(config))
         from ..audio.realtime_player import RealtimeAudioPlayer
 
@@ -184,6 +190,20 @@ class SessionController:
             or self.phase in {SessionPhase.PLAYING_OUTPUT, SessionPhase.TOOL_CALL}
             or self._audio_player.is_playing
         )
+
+    def can_accept_notification(self) -> bool:
+        return self.phase == SessionPhase.IDLE and not self._wakeup_in_progress and not self._audio_player.is_playing
+
+    async def speak_notification(self, notification: str) -> bool:
+        if not self.can_accept_notification():
+            return False
+        self._notification_response_active = True
+        self._set_phase(SessionPhase.SESSION_STARTING)
+        await self._realtime.create_text_response(
+            "Speak this async notification to the user in one to three short sentences, then stop listening: "
+            f"{notification}"
+        )
+        return True
 
     async def shutdown(self) -> None:
         if self._response_delay_task is not None:
@@ -483,6 +503,8 @@ class SessionController:
         self._processing_sound_active = False
 
     def _should_end_session_after_response(self, transcript: str) -> bool:
+        if self._notification_response_active:
+            return True
         if _looks_like_question(transcript):
             return False
         if self._end_session_requested:
@@ -535,6 +557,7 @@ class SessionController:
         self._tool_call_depth = 0
         self._tool_called_in_response_chain = False
         self._end_session_requested = False
+        self._notification_response_active = False
 
     async def _wait_for_output_drain(self, stall_timeout_seconds: float = 8.0) -> None:
         last_pending_samples = self._audio_player.pending_samples
@@ -685,6 +708,9 @@ def _enabled_tools_from_config(config: AppConfig) -> dict[str, bool]:
         "get_state": config.enable_tool_get_state,
         "call_service": config.enable_tool_call_service,
         "web_search": config.enable_tool_web_search,
+        "start_codex_task": config.enable_tool_codex_agent,
+        "get_codex_status": config.enable_tool_codex_agent,
+        "cancel_codex_task": config.enable_tool_codex_agent,
     }
 
 

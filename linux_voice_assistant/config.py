@@ -19,6 +19,9 @@ DEFAULT_INSTRUCTIONS = (
     "You are Berta, a Linux voice satellite for Home Assistant. "
     "Speak naturally and keep spoken replies short. "
     "Use Home Assistant tools for smart-home state and control instead of guessing. "
+    "When the user asks Codex or an agent to do software work, use the Codex tools. "
+    "Codex tasks are asynchronous: acknowledge dispatch briefly, and use Codex status tools for follow-up questions about progress. "
+    "Run Codex in Docker by default. Ask for explicit confirmation before running Codex outside Docker. "
     "Ask a concise follow-up question when a device or area is ambiguous. "
     "Do not mention internal tool names, API calls, or hidden reasoning."
 )
@@ -59,6 +62,12 @@ class AppConfig:
     enable_tool_get_state: bool
     enable_tool_call_service: bool
     enable_tool_web_search: bool
+    enable_tool_codex_agent: bool
+    codex_jobs_dir: Path
+    codex_workspace_dir: Path
+    codex_docker_image: str
+    codex_host_codex_home: Path
+    codex_host_command: str
     frontend: str
     vape_server_host: str
     vape_server_port: int
@@ -99,6 +108,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-silence-seconds", type=float, help="Silence duration that ends a turn")
     parser.add_argument("--follow-up-after-tool-call", action="store_true", help="Keep listening after a tool-backed response")
     parser.add_argument("--no-follow-up-after-tool-call", action="store_true", help="Return to wake-word mode after a tool-backed response")
+    parser.add_argument("--enable-tool-codex-agent", action="store_true", help="Enable Codex agent tools")
+    parser.add_argument("--disable-tool-codex-agent", action="store_true", help="Disable Codex agent tools")
+    parser.add_argument("--codex-jobs-dir", help="Directory for Codex job metadata and logs")
+    parser.add_argument("--codex-workspace-dir", help="Default workspace for Codex tasks")
+    parser.add_argument("--codex-docker-image", help="Docker image used for Codex agent tasks")
+    parser.add_argument("--codex-host-codex-home", help="Host Codex home mounted into the Codex Docker container")
+    parser.add_argument("--codex-host-command", help="Codex executable used for explicitly confirmed host-mode tasks")
     parser.add_argument("--frontend", choices=["local", "vape-server"], help="Audio frontend to run")
     parser.add_argument("--vape-server-host", help="Host/IP for the VAPE satellite WebSocket server")
     parser.add_argument("--vape-server-port", type=int, help="Port for the VAPE satellite WebSocket server")
@@ -172,6 +188,12 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
         follow_up_after_tool_call = True
     elif args.no_follow_up_after_tool_call:
         follow_up_after_tool_call = False
+
+    enable_tool_codex_agent = None
+    if args.enable_tool_codex_agent:
+        enable_tool_codex_agent = True
+    elif args.disable_tool_codex_agent:
+        enable_tool_codex_agent = False
 
     config = AppConfig(
         name=_pick(args.name, os.getenv("LVA_NAME"), _get_str(yaml_config, "device.name"), None),
@@ -252,6 +274,12 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
         enable_tool_get_state=bool(_pick(_env_bool("LVA_ENABLE_TOOL_GET_STATE"), _get_bool(yaml_config, "tools.enable_get_state"), True)),
         enable_tool_call_service=bool(_pick(_env_bool("LVA_ENABLE_TOOL_CALL_SERVICE"), _get_bool(yaml_config, "tools.enable_call_service"), True)),
         enable_tool_web_search=bool(_pick(_env_bool("LVA_ENABLE_TOOL_WEB_SEARCH"), _get_bool(yaml_config, "tools.enable_web_search"), True)),
+        enable_tool_codex_agent=bool(_pick(enable_tool_codex_agent, _env_bool("LVA_ENABLE_TOOL_CODEX_AGENT"), _get_bool(yaml_config, "tools.enable_codex_agent"), True)),
+        codex_jobs_dir=_coerce_path(_pick(args.codex_jobs_dir, os.getenv("LVA_CODEX_JOBS_DIR"), _get_path(yaml_config, "codex.jobs_dir"), _REPO_DIR / "local" / "codex_jobs")),
+        codex_workspace_dir=_coerce_path(_pick(args.codex_workspace_dir, os.getenv("LVA_CODEX_WORKSPACE_DIR"), _get_path(yaml_config, "codex.workspace_dir"), _REPO_DIR)),
+        codex_docker_image=str(_pick(args.codex_docker_image, os.getenv("LVA_CODEX_DOCKER_IMAGE"), _get_str(yaml_config, "codex.docker_image"), "lva-codex-agent:latest")),
+        codex_host_codex_home=_coerce_path(_pick(args.codex_host_codex_home, os.getenv("LVA_CODEX_HOST_CODEX_HOME"), _get_path(yaml_config, "codex.host_codex_home"), Path.home() / ".codex")),
+        codex_host_command=str(_pick(args.codex_host_command, os.getenv("LVA_CODEX_HOST_COMMAND"), _get_str(yaml_config, "codex.host_command"), "codex")),
         frontend=str(_pick(args.frontend, os.getenv("LVA_FRONTEND"), _get_str(yaml_config, "frontend"), "local")),
         vape_server_host=str(_pick(args.vape_server_host, os.getenv("LVA_VAPE_SERVER_HOST"), _get_str(yaml_config, "vape_server.host"), "0.0.0.0")),
         vape_server_port=int(_pick(args.vape_server_port, _env_int("LVA_VAPE_SERVER_PORT"), _get_int(yaml_config, "vape_server.port"), 8765)),

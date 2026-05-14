@@ -4,7 +4,8 @@ import wave
 from aiohttp.test_utils import TestClient, TestServer
 
 from linux_voice_assistant.audio.pcm import PcmFormat
-from linux_voice_assistant.vape.server import RemotePlaybackSink, SatelliteSessionHandler, create_app, create_session_factory
+from linux_voice_assistant.tools.codex_agent import CodexJob
+from linux_voice_assistant.vape.server import RemotePlaybackSink, SatelliteSessionHandler, VoiceSessionRegistry, create_app, create_session_factory, format_codex_completion_notification
 
 
 class FakeController:
@@ -29,7 +30,7 @@ def test_satellite_server_handshake_and_audio_routes_to_controller():
 
 async def _test_satellite_server_handshake_and_audio_routes_to_controller():
     controller = FakeController()
-    app = create_app(lambda _format, _send_json, _send_binary: SatelliteSessionHandler(controller))
+    app = create_app(lambda _format, _send_json, _send_binary, _session_id: SatelliteSessionHandler(controller))
     client = TestClient(TestServer(app))
     await client.start_server()
 
@@ -133,9 +134,10 @@ async def _test_remote_playback_sink_streams_audio_file(tmp_path):
 def test_create_session_factory_builds_remote_playback_sink():
     created = {}
 
-    def make_controller(audio_player, selected_format):
+    def make_controller(audio_player, selected_format, session_id):
         created["audio_player"] = audio_player
         created["selected_format"] = selected_format
+        created["session_id"] = session_id
         return FakeController()
 
     factory = create_session_factory(make_controller, output_sample_rate=24000)
@@ -146,8 +148,65 @@ def test_create_session_factory_builds_remote_playback_sink():
     async def send_binary(payload):
         created.setdefault("binary", []).append(payload)
 
-    handler = factory(PcmFormat(codec="pcm_s16le", sample_rate=24000, channels=1), send_json, send_binary)
+    handler = factory(PcmFormat(codec="pcm_s16le", sample_rate=24000, channels=1), send_json, send_binary, "session-1")
 
     assert isinstance(handler, SatelliteSessionHandler)
     assert isinstance(created["audio_player"], RemotePlaybackSink)
     assert created["selected_format"].sample_rate == 24000
+    assert created["session_id"] == "session-1"
+
+
+def test_codex_completion_notification_is_short_and_status_aware(tmp_path):
+    job = CodexJob(
+        id="job-1",
+        task="fix tests",
+        workspace=tmp_path,
+        execution_mode="docker",
+        origin_session_id="session-1",
+        status="succeeded",
+        final_output="Changed files and tests pass.",
+    )
+
+    notification = format_codex_completion_notification(job)
+
+    assert "Codex finished job job-1" in notification
+    assert "Changed files and tests pass" in notification
+
+
+def test_voice_session_registry_selects_origin_session(tmp_path):
+    asyncio.run(_test_voice_session_registry_selects_origin_session(tmp_path))
+
+
+async def _test_voice_session_registry_selects_origin_session(tmp_path):
+    class IdleController:
+        def __init__(self):
+            self.notifications = []
+
+        def can_accept_notification(self):
+            return True
+
+        async def speak_notification(self, notification):
+            self.notifications.append(notification)
+            return True
+
+    registry = VoiceSessionRegistry()
+    origin = IdleController()
+    other = IdleController()
+    registry.register("origin", origin)
+    registry.register("other", other)
+
+    job = CodexJob(
+        id="job-2",
+        task="fix tests",
+        workspace=tmp_path,
+        execution_mode="docker",
+        origin_session_id="origin",
+        status="succeeded",
+        final_output="All done.",
+    )
+
+    await registry.notify_codex_job_finished(job)
+    await asyncio.sleep(0.01)
+
+    assert origin.notifications
+    assert other.notifications == []

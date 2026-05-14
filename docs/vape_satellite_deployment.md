@@ -92,6 +92,14 @@ tools:
   enable_get_state: true
   enable_call_service: true
   enable_web_search: true
+  enable_codex_agent: true
+
+codex:
+  jobs_dir: local/codex_jobs
+  workspace_dir: /opt/linux-voice-assistant
+  docker_image: lva-codex-agent:latest
+  host_codex_home: /home/YOUR_USER/.codex
+  host_command: /home/YOUR_USER/.local/bin/codex
 ```
 
 Keep secrets in environment variables or a local `.env` file that is not committed:
@@ -102,6 +110,18 @@ export HOME_ASSISTANT_URL="http://homeassistant.local:8123"
 export HOME_ASSISTANT_TOKEN="..."
 export LVA_HA_VERIFY_SSL="false"
 ```
+
+## Codex Agent Tasks
+
+When `tools.enable_codex_agent` is enabled, the assistant exposes async Codex tools to the Realtime model. Users can say things like "ask Codex to fix the tests" or "ask the agent how the backend is structured." The backend accepts one Codex job at a time, records logs in `codex.jobs_dir`, and speaks the final result back to the VAPE or Windows front that requested the job. Status questions like "is Codex still running?" use the saved job state and live JSONL events.
+
+Build the default Docker image on the Linux backend host:
+
+```sh
+docker build -t lva-codex-agent:latest -f docker/codex-agent/Dockerfile .
+```
+
+The Docker runner mounts only the selected workspace, the job log directory, and `codex.host_codex_home`. It runs `codex exec --json` non-interactively and writes the final agent message to the job directory. Host execution is intentionally separate: if the model thinks a task needs host access outside Docker, it should ask the user for explicit confirmation before calling the tool with `execution_mode: host`.
 
 ## Run Manually
 

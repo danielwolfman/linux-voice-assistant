@@ -69,3 +69,30 @@ def test_response_create_event_includes_current_voice():
             },
         },
     }
+
+
+def test_create_text_response_sends_user_message_and_response():
+    async def run():
+        sent = []
+
+        class FakeConnection:
+            async def send(self, payload):
+                sent.append(payload)
+
+        client = object.__new__(OpenAIRealtimeClient)
+        client._connection = FakeConnection()
+        client._build_response_create_event = lambda: {"type": "response.create"}
+
+        async def connect():
+            return None
+
+        client.connect = connect
+
+        await client.create_text_response("Codex finished")
+
+        assert sent[0]["type"] == "conversation.item.create"
+        assert sent[0]["item"]["content"][0]["type"] == "input_text"
+        assert sent[0]["item"]["content"][0]["text"] == "Codex finished"
+        assert sent[1] == {"type": "response.create"}
+
+    asyncio.run(run())

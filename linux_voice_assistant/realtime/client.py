@@ -105,6 +105,24 @@ class OpenAIRealtimeClient:
         except Exception as err:
             await self._notify_error(err)
 
+    async def create_text_response(self, text: str) -> None:
+        try:
+            await self.connect()
+            assert self._connection is not None
+            await self._connection.send(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": text}],
+                    },
+                }
+            )
+            await self._connection.send(self._build_response_create_event())
+        except Exception as err:
+            await self._notify_error(err)
+
     async def clear_input_audio(self) -> None:
         try:
             if self._connection is None:

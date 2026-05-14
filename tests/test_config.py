@@ -40,6 +40,8 @@ runtime:
     assert config.enable_tool_get_state is True
     assert config.enable_tool_call_service is True
     assert config.enable_tool_web_search is True
+    assert config.enable_tool_codex_agent is True
+    assert config.codex_docker_image == "lva-codex-agent:latest"
 
 
 def test_load_config_reads_vape_server_options(tmp_path, monkeypatch):
@@ -71,3 +73,41 @@ vape_server:
     assert config.vape_server_port == 8765
     assert config.vape_server_path == "/vape"
     assert config.vape_output_sample_rate == 48000
+
+
+def test_load_config_reads_codex_options(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    workspace = tmp_path / "workspace"
+    jobs = tmp_path / "jobs"
+    codex_home = tmp_path / ".codex"
+    config_path.write_text(
+        f"""
+home_assistant:
+  url: http://yaml.local:8123
+  token: yaml-token
+openai:
+  api_key: yaml-openai
+tools:
+  enable_codex_agent: false
+codex:
+  jobs_dir: {jobs}
+  workspace_dir: {workspace}
+  docker_image: custom-codex:latest
+  host_codex_home: {codex_home}
+  host_command: /home/daniel/.local/bin/codex
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("HOME_ASSISTANT_URL", raising=False)
+    monkeypatch.delenv("HOME_ASSISTANT_TOKEN", raising=False)
+
+    config, _ = load_config(["--config", os.fspath(config_path)])
+
+    assert config.enable_tool_codex_agent is False
+    assert config.codex_jobs_dir == jobs
+    assert config.codex_workspace_dir == workspace
+    assert config.codex_docker_image == "custom-codex:latest"
+    assert config.codex_host_codex_home == codex_home
+    assert config.codex_host_command == "/home/daniel/.local/bin/codex"
