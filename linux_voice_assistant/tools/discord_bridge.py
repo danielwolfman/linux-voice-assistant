@@ -14,6 +14,7 @@ _LOGGER = logging.getLogger(__name__)
 
 DISCORD_ORIGIN_PREFIX = "discord:"
 _DISCORD_ID_RE = re.compile(r"\d{15,25}")
+_STILL_WORKING_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,14 @@ class DiscordSendResult:
 
     def as_dict(self) -> dict[str, str]:
         return {"user_id": self.user_id, "status": self.status, "error": self.error}
+
+
+@dataclass
+class DiscordJobContext:
+    user_id: str
+    channel: Any
+    message: Any
+    still_working_task: Optional[asyncio.Task[None]] = None
 
 
 def parse_discord_user_ids(value: object) -> list[str]:
@@ -63,6 +72,7 @@ class DiscordBotService:
         self._task: Optional[asyncio.Task[Any]] = None
         self._ready = asyncio.Event()
         self._lock = asyncio.Lock()
+        self._job_contexts: dict[str, DiscordJobContext] = {}
 
     @property
     def configured(self) -> bool:
@@ -113,6 +123,10 @@ class DiscordBotService:
     async def close(self) -> None:
         if self._client is not None:
             await self._client.close()
+        for context in self._job_contexts.values():
+            if context.still_working_task is not None:
+                context.still_working_task.cancel()
+        self._job_contexts.clear()
         if self._task is not None:
             try:
                 await self._task
@@ -155,11 +169,17 @@ class DiscordBotService:
         if not user_id:
             return
         if job.status == "succeeded":
-            text = job.final_output.strip() or "Codex finished without a final message."
-            message = f"Codex finished job {job.id}.\n\n{_truncate_discord_message(text)}"
+            message = job.final_output.strip() or "Codex finished without a final message."
         else:
-            detail = job.error or job.final_output or job.last_event or "No details were reported."
-            message = f"Codex job {job.id} did not finish successfully. Status: {job.status}.\n\n{_truncate_discord_message(detail)}"
+            message = job.error or job.final_output or job.last_event or "No details were reported."
+
+        context = self._job_contexts.pop(job.id, None)
+        if context is not None:
+            if context.still_working_task is not None:
+                context.still_working_task.cancel()
+            await self._reply_to_context(context, message)
+            return
+
         result = await self.send_message(message, [user_id])
         if result.get("status") != "sent":
             _LOGGER.warning("Failed to send Discord Codex completion for job %s: %s", job.id, result)
@@ -185,24 +205,77 @@ class DiscordBotService:
             return
 
         async with self._lock:
-            reply = await self._execute_discord_command(author_id, content)
-        await message.channel.send(reply)
+            result = await self._execute_discord_command(author_id, content)
+        reply = result.get("reply")
+        if isinstance(reply, str) and reply:
+            await message.channel.send(reply)
+            return
 
-    async def _execute_discord_command(self, author_id: str, content: str) -> str:
+        start_result = result.get("start_result")
+        if not isinstance(start_result, dict):
+            return
+        if start_result.get("status") != "accepted":
+            await message.channel.send(_format_start_result(start_result))
+            return
+
+        job = start_result.get("job") or {}
+        job_id = str(job.get("id") or "")
+        if not job_id:
+            return
+        await self._react_accepted(message)
+        self._remember_job_context(job_id, author_id, message)
+
+    async def _execute_discord_command(self, author_id: str, content: str) -> dict[str, Any]:
         command = content.strip()
         command_key = command.lower()
         if command_key in {"help", "/help"}:
-            return "Send a Codex task here, or use `status` / `cancel`."
+            return {"reply": "Send a Codex task here, or use `status` / `cancel`."}
         if command_key in {"status", "/status"}:
-            return _format_status_result(self._codex_manager.get_status(""))
+            return {"reply": _format_status_result(self._codex_manager.get_status(""))}
         if command_key in {"cancel", "/cancel"}:
-            return _format_status_result(await self._codex_manager.cancel_task(""))
+            return {"reply": _format_status_result(await self._codex_manager.cancel_task(""))}
 
         result = await self._codex_manager.start_task(
             {"task": command, "execution_mode": "docker"},
             origin_session_id=discord_origin_session_id(author_id),
         )
-        return _format_start_result(result)
+        return {"start_result": result}
+
+    def _remember_job_context(self, job_id: str, author_id: str, message: Any) -> None:
+        context = DiscordJobContext(user_id=author_id, channel=message.channel, message=message)
+        context.still_working_task = asyncio.create_task(self._send_still_working_if_active(job_id))
+        self._job_contexts[job_id] = context
+
+    async def _send_still_working_if_active(self, job_id: str) -> None:
+        try:
+            await asyncio.sleep(_STILL_WORKING_SECONDS)
+            context = self._job_contexts.get(job_id)
+            if context is None:
+                return
+            status = self._codex_manager.get_status(job_id)
+            job = status.get("job") or {}
+            if isinstance(job, dict) and job.get("status") in {"queued", "running", "cancelling"}:
+                await self._reply_to_context(context, "I'm still working on it")
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Failed to send Discord still-working update for Codex job %s", job_id)
+
+    async def _reply_to_context(self, context: DiscordJobContext, message: str) -> None:
+        text = _truncate_discord_message(message)
+        try:
+            await context.channel.send(text, reference=context.message)
+        except TypeError:
+            await context.channel.send(text)
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Failed to reply to Discord Codex job context; falling back to DM")
+            await self.send_message(text, [context.user_id])
+
+    async def _react_accepted(self, message: Any) -> None:
+        try:
+            await message.add_reaction("\N{EYES}")
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Failed to react to accepted Discord Codex task")
 
     async def _send_dm(self, user_id: str, message: str) -> DiscordSendResult:
         try:
@@ -279,8 +352,7 @@ def _is_dm(message: Any) -> bool:
 def _format_start_result(result: dict[str, Any]) -> str:
     status = result.get("status")
     if status == "accepted":
-        job = result.get("job") or {}
-        return f"Accepted Codex job {job.get('id', '')}. I will DM you when it finishes."
+        return ""
     if status == "busy":
         active = result.get("active_job") or {}
         return f"Codex is already running job {active.get('id', '')}. Latest: {active.get('last_event') or 'starting'}"

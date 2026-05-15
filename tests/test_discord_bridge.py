@@ -1,6 +1,9 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
+from linux_voice_assistant.tools import discord_bridge
+from linux_voice_assistant.tools.codex_agent import CodexJob
 from linux_voice_assistant.tools.discord_bridge import DiscordBotService, DiscordTool, discord_origin_session_id, discord_user_id_from_origin, parse_discord_user_ids
 
 
@@ -54,3 +57,134 @@ def test_discord_service_formats_dm_tool_error_when_not_connected(tmp_path):
 
     assert result["status"] == "error"
     assert result["error"] == "Discord bot is not connected."
+
+
+def test_discord_accepts_job_with_reaction_and_no_reply():
+    asyncio.run(_test_discord_accepts_job_with_reaction_and_no_reply())
+
+
+async def _test_discord_accepts_job_with_reaction_and_no_reply():
+    manager = FakeCodexManager({"status": "accepted", "job": {"id": "job-1", "status": "running"}})
+    service = DiscordBotService(
+        token="",
+        client_id="1504771552921518190",
+        allowed_user_ids="130283160301862913",
+        codex_manager=manager,  # type: ignore[arg-type]
+    )
+    message = FakeMessage("130283160301862913", "fix the tests")
+
+    await service._handle_message(message)  # pylint: disable=protected-access
+    await service.close()
+
+    assert message.reactions == ["\N{EYES}"]
+    assert message.channel.messages == []
+    assert manager.started_with == ("130283160301862913", "fix the tests")
+
+
+def test_discord_ignores_unallowed_user_without_reaction_or_reply():
+    asyncio.run(_test_discord_ignores_unallowed_user_without_reaction_or_reply())
+
+
+async def _test_discord_ignores_unallowed_user_without_reaction_or_reply():
+    manager = FakeCodexManager({"status": "accepted", "job": {"id": "job-1", "status": "running"}})
+    service = DiscordBotService(
+        token="",
+        client_id="1504771552921518190",
+        allowed_user_ids="130283160301862913",
+        codex_manager=manager,  # type: ignore[arg-type]
+    )
+    message = FakeMessage("468850569986179084", "fix the tests")
+
+    await service._handle_message(message)  # pylint: disable=protected-access
+
+    assert message.reactions == []
+    assert message.channel.messages == []
+    assert manager.started_with is None
+
+
+def test_discord_completion_replies_only_final_output():
+    asyncio.run(_test_discord_completion_replies_only_final_output())
+
+
+async def _test_discord_completion_replies_only_final_output():
+    manager = FakeCodexManager({"status": "accepted", "job": {"id": "job-1", "status": "running"}})
+    service = DiscordBotService(
+        token="",
+        client_id="1504771552921518190",
+        allowed_user_ids="130283160301862913",
+        codex_manager=manager,  # type: ignore[arg-type]
+    )
+    message = FakeMessage("130283160301862913", "fix the tests")
+    await service._handle_message(message)  # pylint: disable=protected-access
+
+    job = CodexJob(
+        id="job-1",
+        task="fix the tests",
+        workspace=Path("/tmp"),
+        execution_mode="docker",
+        origin_session_id=discord_origin_session_id("130283160301862913"),
+        status="succeeded",
+        final_output="Changed the test and it passes.",
+    )
+    await service.notify_codex_job_finished(job)
+
+    assert message.channel.messages == [("Changed the test and it passes.", message)]
+
+
+def test_discord_sends_still_working_after_delay(monkeypatch):
+    asyncio.run(_test_discord_sends_still_working_after_delay(monkeypatch))
+
+
+async def _test_discord_sends_still_working_after_delay(monkeypatch):
+    monkeypatch.setattr(discord_bridge, "_STILL_WORKING_SECONDS", 0)
+    manager = FakeCodexManager({"status": "accepted", "job": {"id": "job-1", "status": "running"}})
+    service = DiscordBotService(
+        token="",
+        client_id="1504771552921518190",
+        allowed_user_ids="130283160301862913",
+        codex_manager=manager,  # type: ignore[arg-type]
+    )
+    message = FakeMessage("130283160301862913", "fix the tests")
+
+    await service._handle_message(message)  # pylint: disable=protected-access
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert message.channel.messages == [("I'm still working on it", message)]
+    await service.close()
+
+
+class FakeCodexManager:
+    def __init__(self, start_result):
+        self.start_result = start_result
+        self.started_with = None
+
+    async def start_task(self, arguments, *, origin_session_id):
+        self.started_with = (discord_user_id_from_origin(origin_session_id), arguments["task"])
+        return self.start_result
+
+    def get_status(self, job_id=""):
+        return {"status": "ok", "job": {"id": job_id or "job-1", "status": "running"}}
+
+    async def cancel_task(self, job_id=""):
+        return {"status": "not_running", "job": {"id": job_id or "job-1", "status": "cancelled"}}
+
+
+class FakeChannel:
+    def __init__(self):
+        self.messages = []
+
+    async def send(self, text, reference=None):
+        self.messages.append((text, reference))
+
+
+class FakeMessage:
+    def __init__(self, user_id, content):
+        self.author = SimpleNamespace(id=user_id, bot=False)
+        self.content = content
+        self.guild = None
+        self.channel = FakeChannel()
+        self.reactions = []
+
+    async def add_reaction(self, reaction):
+        self.reactions.append(reaction)
