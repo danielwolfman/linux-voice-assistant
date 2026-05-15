@@ -34,6 +34,7 @@ openai:
     If a script or scene clearly matches the request, prefer calling it rather than searching for a lower-level player or device.
     If the user indicates the conversation is over or asks you to stop listening, call end_session.
     For current events, internet information, public facts beyond Home Assistant, or external services, use web_search.
+    When the user asks Codex or an agent to do software work without naming a repo, use the configured default workspace and do not ask which repo.
 
 home_assistant:
   url: http://homeassistant.local:8123

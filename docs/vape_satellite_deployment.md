@@ -101,6 +101,7 @@ codex:
   workspace_dir: /opt/linux-voice-assistant
   docker_image: lva-codex-agent:latest
   host_codex_home: /home/YOUR_USER/.codex
+  host_gh_config_dir: /home/YOUR_USER/.config/gh
   host_command: /home/YOUR_USER/.local/bin/codex
 ```
 
@@ -136,7 +137,7 @@ Log in to Codex as the same Linux user that runs the backend service:
 /home/YOUR_USER/.local/bin/codex login status
 ```
 
-The Docker runner mounts only the selected workspace, the job log directory, and `codex.host_codex_home`. It removes the backend service's OpenAI API environment variables before starting Codex, so Codex uses the mounted ChatGPT/Codex login by default. It runs `codex exec --json` non-interactively and writes the final agent message to the job directory. Inside Docker, Codex runs with `--sandbox danger-full-access` because the container is the isolation boundary; `workspace-write` can fail inside this container when Codex tries to create a nested sandbox namespace. Host execution is intentionally separate and still uses `workspace-write`: if the model thinks a task needs host access outside Docker, it should ask the user for explicit confirmation before calling the tool with `execution_mode: host`.
+The Docker runner mounts only the selected workspace, the job log directory, `codex.host_codex_home`, and, when present, `codex.host_gh_config_dir`. It removes the backend service's OpenAI API environment variables before starting Codex, so Codex uses the mounted ChatGPT/Codex login by default. The Docker image includes GitHub CLI, and the mounted `gh` config lets containerized Codex use the same GitHub auth as the backend host. It runs `codex exec --json` non-interactively and writes the final agent message to the job directory. Inside Docker, Codex runs with `--sandbox danger-full-access` because the container is the isolation boundary; `workspace-write` can fail inside this container when Codex tries to create a nested sandbox namespace. Host execution is intentionally separate and still uses `workspace-write`: if the model thinks a task needs host access outside Docker, it should ask the user for explicit confirmation before calling the tool with `execution_mode: host`.
 
 The backend service user must be able to run Docker and access the mounted paths. Check this as the same user that runs the service:
 

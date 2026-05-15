@@ -57,11 +57,14 @@ def test_codex_manager_accepts_docker_job_and_reports_busy(tmp_path):
 
 def test_codex_manager_uses_absolute_job_dir_and_docker_container_boundary(tmp_path, monkeypatch):
     monkeypatch.setattr(codex_agent.os, "getgroups", lambda: [115, 1000, 115])
+    gh_config = tmp_path / ".config" / "gh"
+    gh_config.mkdir(parents=True)
     manager = CodexJobManager(
         jobs_dir=tmp_path / "relative" / ".." / "jobs",
         default_workspace=tmp_path,
         docker_image="lva-codex-agent:latest",
         host_codex_home=tmp_path / ".codex",
+        host_gh_config_dir=gh_config,
     )
 
     job = manager._create_job(task="inspect", workspace=tmp_path, execution_mode="docker", origin_session_id="session-1")
@@ -72,6 +75,8 @@ def test_codex_manager_uses_absolute_job_dir_and_docker_container_boundary(tmp_p
     assert "OPENAI_API_KEY" not in command
     assert "--group-add" in command
     assert command[command.index("--group-add") + 1] == "115"
+    assert f"{gh_config}:/codex-home/.config/gh" in command
+    assert "GH_CONFIG_DIR=/codex-home/.config/gh" in command
     assert command[command.index("--sandbox") + 1] == "danger-full-access"
     assert command[command.index("codex") + 1 : command.index("codex") + 4] == [
         "--ask-for-approval",

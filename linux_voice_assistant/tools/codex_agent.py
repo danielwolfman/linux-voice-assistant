@@ -71,6 +71,7 @@ class CodexJobManager:
         default_workspace: Path,
         docker_image: str,
         host_codex_home: Path,
+        host_gh_config_dir: Path | None = None,
         host_command: str = "codex",
         completion_callback: Optional[CodexCompletionCallback] = None,
         max_final_output_chars: int = 4000,
@@ -79,6 +80,7 @@ class CodexJobManager:
         self._default_workspace = default_workspace
         self._docker_image = docker_image
         self._host_codex_home = host_codex_home
+        self._host_gh_config_dir = host_gh_config_dir
         self._host_command = host_command
         self._completion_callback = completion_callback
         self._max_final_output_chars = max_final_output_chars
@@ -305,6 +307,20 @@ class CodexJobManager:
                 f"{job.job_dir}:/job",
                 "-v",
                 f"{self._host_codex_home.expanduser()}:/codex-home/.codex",
+            ]
+        )
+        gh_config_dir = self._resolved_gh_config_dir()
+        if gh_config_dir is not None:
+            command.extend(
+                [
+                    "-v",
+                    f"{gh_config_dir}:/codex-home/.config/gh",
+                    "-e",
+                    "GH_CONFIG_DIR=/codex-home/.config/gh",
+                ]
+            )
+        command.extend(
+            [
                 "-w",
                 "/workspace",
                 self._docker_image,
@@ -324,6 +340,12 @@ class CodexJobManager:
             ]
         )
         return command
+
+    def _resolved_gh_config_dir(self) -> Path | None:
+        if self._host_gh_config_dir is None:
+            return None
+        path = self._host_gh_config_dir.expanduser()
+        return path if path.exists() else None
 
     def _check_docker_preflight(self, job: CodexJob) -> None:
         problems = []
@@ -363,6 +385,21 @@ class CodexJobManager:
                 problems.append(
                     f"{label} is not accessible by uid {os.getuid()} gid {os.getgid()}: {resolved} {detail}"
                 )
+
+        gh_config_dir = self._resolved_gh_config_dir()
+        if gh_config_dir is None:
+            configured_gh_config_dir = self._host_gh_config_dir.expanduser() if self._host_gh_config_dir is not None else None
+            if configured_gh_config_dir is not None:
+                _LOGGER.info("GitHub CLI config directory is not mounted for Codex Docker jobs because it does not exist: %s", configured_gh_config_dir)
+        elif not os.access(gh_config_dir, os.R_OK | os.X_OK):
+            try:
+                stat_result = gh_config_dir.stat()
+                detail = f"owner={stat_result.st_uid}:{stat_result.st_gid} mode={oct(stat_result.st_mode & 0o777)}"
+            except OSError as err:
+                detail = f"stat failed: {err}"
+            problems.append(
+                f"GitHub CLI config directory is not readable by uid {os.getuid()} gid {os.getgid()}: {gh_config_dir} {detail}"
+            )
 
         if problems:
             detail = "\n".join(f"- {problem}" for problem in problems)
@@ -447,7 +484,9 @@ def _start_codex_task_tool() -> dict[str, Any]:
         "name": "start_codex_task",
         "description": (
             "Dispatch an asynchronous task to a Codex coding agent. Use when the user asks Codex or an agent to do software work. "
-            "Default to Docker execution. If the task needs host access outside Docker, ask the user for explicit confirmation first."
+            "Default to Docker execution. If the user does not name a repo or workspace, omit workspace so the configured default workspace is used. "
+            "Do not ask which repo unless the user explicitly refers to another repo ambiguously. "
+            "If the task needs host access outside Docker, ask the user for explicit confirmation first."
         ),
         "parameters": {
             "type": "object",
@@ -458,7 +497,7 @@ def _start_codex_task_tool() -> dict[str, Any]:
                 },
                 "workspace": {
                     "type": "string",
-                    "description": "Optional workspace directory. Ask a follow-up if the target project is ambiguous.",
+                    "description": "Optional workspace directory. Omit to use the configured default workspace; do not ask the user for a repo only because this is missing.",
                 },
                 "execution_mode": {
                     "type": "string",

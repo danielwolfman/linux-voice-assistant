@@ -22,6 +22,7 @@ DEFAULT_INSTRUCTIONS = (
     "When the user asks Codex or an agent to do software work, use the Codex tools. "
     "Codex tasks are asynchronous: acknowledge dispatch briefly, and use Codex status tools for follow-up questions about progress. "
     "Run Codex in Docker by default. Ask for explicit confirmation before running Codex outside Docker. "
+    "If the user does not specify a repo or workspace for Codex, omit the workspace field and use the configured default; do not ask which repo. "
     "When the user asks to set a timer, use the timer tools; the assistant will notify the requesting device when the timer finishes. "
     "Ask a concise follow-up question when a device or area is ambiguous. "
     "Do not mention internal tool names, API calls, or hidden reasoning."
@@ -70,6 +71,7 @@ class AppConfig:
     codex_workspace_dir: Path
     codex_docker_image: str
     codex_host_codex_home: Path
+    codex_host_gh_config_dir: Path
     codex_host_command: str
     frontend: str
     vape_server_host: str
@@ -120,6 +122,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-workspace-dir", help="Default workspace for Codex tasks")
     parser.add_argument("--codex-docker-image", help="Docker image used for Codex agent tasks")
     parser.add_argument("--codex-host-codex-home", help="Host Codex home mounted into the Codex Docker container")
+    parser.add_argument("--codex-host-gh-config-dir", help="Host GitHub CLI config directory mounted into the Codex Docker container")
     parser.add_argument("--codex-host-command", help="Codex executable used for explicitly confirmed host-mode tasks")
     parser.add_argument("--frontend", choices=["local", "vape-server"], help="Audio frontend to run")
     parser.add_argument("--vape-server-host", help="Host/IP for the VAPE satellite WebSocket server")
@@ -298,6 +301,7 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
         codex_workspace_dir=_coerce_path(_pick(args.codex_workspace_dir, os.getenv("LVA_CODEX_WORKSPACE_DIR"), _get_path(yaml_config, "codex.workspace_dir"), _REPO_DIR)),
         codex_docker_image=str(_pick(args.codex_docker_image, os.getenv("LVA_CODEX_DOCKER_IMAGE"), _get_str(yaml_config, "codex.docker_image"), "lva-codex-agent:latest")),
         codex_host_codex_home=_coerce_path(_pick(args.codex_host_codex_home, os.getenv("LVA_CODEX_HOST_CODEX_HOME"), _get_path(yaml_config, "codex.host_codex_home"), Path.home() / ".codex")),
+        codex_host_gh_config_dir=_coerce_path(_pick(args.codex_host_gh_config_dir, os.getenv("LVA_CODEX_HOST_GH_CONFIG_DIR"), _get_path(yaml_config, "codex.host_gh_config_dir"), Path.home() / ".config" / "gh")),
         codex_host_command=str(_pick(args.codex_host_command, os.getenv("LVA_CODEX_HOST_COMMAND"), _get_str(yaml_config, "codex.host_command"), "codex")),
         frontend=str(_pick(args.frontend, os.getenv("LVA_FRONTEND"), _get_str(yaml_config, "frontend"), "local")),
         vape_server_host=str(_pick(args.vape_server_host, os.getenv("LVA_VAPE_SERVER_HOST"), _get_str(yaml_config, "vape_server.host"), "0.0.0.0")),

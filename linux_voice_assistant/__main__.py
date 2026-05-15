@@ -180,6 +180,7 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
         default_workspace=config.codex_workspace_dir,
         docker_image=config.codex_docker_image,
         host_codex_home=config.codex_host_codex_home,
+        host_gh_config_dir=config.codex_host_gh_config_dir,
         host_command=config.codex_host_command,
         completion_callback=voice_sessions.notify_codex_job_finished,
     )

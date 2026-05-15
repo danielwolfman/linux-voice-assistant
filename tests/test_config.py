@@ -82,6 +82,7 @@ def test_load_config_reads_codex_options(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     jobs = tmp_path / "jobs"
     codex_home = tmp_path / ".codex"
+    gh_config = tmp_path / ".config" / "gh"
     config_path.write_text(
         f"""
 home_assistant:
@@ -96,6 +97,7 @@ codex:
   workspace_dir: {workspace}
   docker_image: custom-codex:latest
   host_codex_home: {codex_home}
+  host_gh_config_dir: {gh_config}
   host_command: /home/daniel/.local/bin/codex
 """,
         encoding="utf-8",
@@ -112,4 +114,5 @@ codex:
     assert config.codex_workspace_dir == workspace
     assert config.codex_docker_image == "custom-codex:latest"
     assert config.codex_host_codex_home == codex_home
+    assert config.codex_host_gh_config_dir == gh_config
     assert config.codex_host_command == "/home/daniel/.local/bin/codex"

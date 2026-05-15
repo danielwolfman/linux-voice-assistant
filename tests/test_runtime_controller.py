@@ -148,6 +148,7 @@ def test_prepare_vape_server_config_keeps_backend_cues(tmp_path):
         codex_workspace_dir=tmp_path,
         codex_docker_image="lva-codex-agent:latest",
         codex_host_codex_home=tmp_path / ".codex",
+        codex_host_gh_config_dir=tmp_path / ".config" / "gh",
         codex_host_command="codex",
         debug=False,
         vape_server_host="0.0.0.0",
