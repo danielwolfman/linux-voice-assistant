@@ -158,6 +158,8 @@ def test_prepare_vape_server_config_keeps_backend_cues(tmp_path):
         codex_host_codex_home=tmp_path / ".codex",
         codex_host_gh_config_dir=tmp_path / ".config" / "gh",
         codex_host_command="codex",
+        codex_dispatch_mode="exec",
+        codex_app_server_command="codex",
         discord_enabled=True,
         discord_bot_token="",
         discord_client_id="1504771552921518190",

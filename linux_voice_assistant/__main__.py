@@ -196,6 +196,8 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
         host_codex_home=config.codex_host_codex_home,
         host_gh_config_dir=config.codex_host_gh_config_dir,
         host_command=config.codex_host_command,
+        dispatch_mode=config.codex_dispatch_mode,
+        app_server_command=config.codex_app_server_command,
         completion_callback=notify_codex_job_finished,
     )
     discord_service = DiscordBotService(

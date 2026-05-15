@@ -1,13 +1,19 @@
 import asyncio
 
 from linux_voice_assistant.tools import codex_agent
-from linux_voice_assistant.tools.codex_agent import CodexAgentTool, CodexJobManager, summarize_codex_event
+from linux_voice_assistant.tools.codex_agent import CodexAgentTool, CodexJobManager, summarize_app_server_event, summarize_codex_event
 
 
 def test_summarize_codex_event_handles_json_message():
     summary = summarize_codex_event('{"type":"agent_message","message":"working on tests"}\n')
 
     assert summary == "agent_message: working on tests"
+
+
+def test_summarize_app_server_event_handles_final_answer_delta():
+    summary = summarize_app_server_event('{"method":"item/agentMessage/delta","params":{"delta":"OK"}}\n')
+
+    assert summary == "Codex is writing the final answer"
 
 
 def test_codex_manager_rejects_host_without_confirmation(tmp_path):
@@ -51,6 +57,33 @@ def test_codex_manager_accepts_docker_job_and_reports_busy(tmp_path):
         assert first["status"] == "accepted"
         assert second["status"] == "busy"
         assert started[0].origin_session_id == "session-1"
+
+    asyncio.run(run())
+
+
+def test_codex_manager_maps_default_jobs_to_app_server_when_configured(tmp_path):
+    async def run():
+        manager = CodexJobManager(
+            jobs_dir=tmp_path / "jobs",
+            default_workspace=tmp_path,
+            docker_image="lva-codex-agent:latest",
+            host_codex_home=tmp_path / ".codex",
+            dispatch_mode="app_server",
+            app_server_command="/home/daniel/.local/bin/codex",
+        )
+        started = []
+
+        async def fake_run(job):
+            started.append(job)
+
+        manager._run_job = fake_run
+
+        result = await manager.start_task({"task": "inspect the repo"}, origin_session_id="session-1")
+        await asyncio.sleep(0)
+
+        assert result["status"] == "accepted"
+        assert result["job"]["execution_mode"] == "app_server"
+        assert started[0].execution_mode == "app_server"
 
     asyncio.run(run())
 

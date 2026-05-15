@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -40,6 +41,8 @@ class CodexJob:
     final_output_path: Path = Path()
     events_path: Path = Path()
     stderr_path: Path = Path()
+    app_server_thread_id: str = ""
+    app_server_turn_id: str = ""
     _process: Optional[asyncio.subprocess.Process] = field(default=None, repr=False, compare=False)
 
     @property
@@ -75,6 +78,8 @@ class CodexJobManager:
         host_codex_home: Path,
         host_gh_config_dir: Path | None = None,
         host_command: str = "codex",
+        dispatch_mode: str = "exec",
+        app_server_command: str = "codex",
         completion_callback: Optional[CodexCompletionCallback] = None,
         max_final_output_chars: int = 4000,
     ) -> None:
@@ -84,6 +89,8 @@ class CodexJobManager:
         self._host_codex_home = host_codex_home
         self._host_gh_config_dir = host_gh_config_dir
         self._host_command = host_command
+        self._dispatch_mode = dispatch_mode.strip().lower()
+        self._app_server_command = app_server_command
         self._completion_callback = completion_callback
         self._max_final_output_chars = max_final_output_chars
         self._jobs: dict[str, CodexJob] = {}
@@ -140,6 +147,7 @@ class CodexJobManager:
                 "status": "needs_confirmation",
                 "message": "Host execution needs explicit user confirmation. Ask whether to run Codex outside Docker, then retry with host_execution_confirmed=true.",
             }
+        resolved_execution_mode = self._resolve_execution_mode(execution_mode)
 
         workspace = self._resolve_workspace(str(arguments.get("workspace") or ""))
         if not workspace.exists():
@@ -151,14 +159,14 @@ class CodexJobManager:
         job = self._create_job(
             task=task,
             workspace=workspace,
-            execution_mode=execution_mode,
+            execution_mode=resolved_execution_mode,
             origin_session_id=origin_session_id,
             origin_language=origin_language,
         )
         self._jobs[job.id] = job
         self._active_job_id = job.id
         asyncio.create_task(self._run_job(job))
-        _LOGGER.info("Started Codex job %s mode=%s workspace=%s", job.id, execution_mode, workspace)
+        _LOGGER.info("Started Codex job %s mode=%s requested_mode=%s workspace=%s", job.id, resolved_execution_mode, execution_mode, workspace)
         return {
             "status": "accepted",
             "job": job.as_tool_result(),
@@ -178,6 +186,8 @@ class CodexJobManager:
         if not job.is_active or job._process is None:
             return {"status": "not_running", "job": job.as_tool_result()}
         job.status = "cancelling"
+        if job.execution_mode == "app_server":
+            await self._interrupt_app_server_job(job)
         job._process.terminate()
         try:
             await asyncio.wait_for(job._process.wait(), timeout=5)
@@ -201,6 +211,11 @@ class CodexJobManager:
         if not path.is_absolute():
             path = self._default_workspace / path
         return path.resolve()
+
+    def _resolve_execution_mode(self, requested_mode: str) -> str:
+        if self._dispatch_mode == "app_server":
+            return "app_server"
+        return requested_mode
 
     def _create_job(
         self,
@@ -240,6 +255,10 @@ class CodexJobManager:
             "created_at": job.created_at,
         }
         (job.job_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+        if job.execution_mode == "app_server":
+            await self._run_app_server_job(job)
+            return
+
         command = self._build_command(job)
         (job.job_dir / "command.txt").write_text(" ".join(shlex.quote(part) for part in command), encoding="utf-8")
 
@@ -287,6 +306,203 @@ class CodexJobManager:
                     await self._completion_callback(job)
                 except Exception:  # pylint: disable=broad-except
                     _LOGGER.exception("Codex completion callback failed for job %s", job.id)
+
+    async def _run_app_server_job(self, job: CodexJob) -> None:
+        command = [self._app_server_command, "app-server", "--listen", "stdio://"]
+        (job.job_dir / "command.txt").write_text(" ".join(shlex.quote(part) for part in command), encoding="utf-8")
+        request_id = 0
+        final_output = ""
+
+        try:
+            process_env = _codex_process_env()
+            job._process = await asyncio.create_subprocess_exec(
+                *command,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=process_env,
+            )
+            assert job._process.stdin is not None
+            assert job._process.stdout is not None
+
+            stderr_task = asyncio.create_task(self._capture_stderr(job))
+
+            async def send_request(method: str, params: dict[str, Any]) -> int:
+                nonlocal request_id
+                request_id += 1
+                payload = {"id": request_id, "method": method, "params": params}
+                job._process.stdin.write((json.dumps(payload) + "\n").encode("utf-8"))
+                await job._process.stdin.drain()
+                return request_id
+
+            initialize_id = await send_request(
+                "initialize",
+                {"clientInfo": {"name": "linux-voice-assistant", "version": "0"}, "capabilities": {}},
+            )
+            thread_start_id = await send_request(
+                "thread/start",
+                {
+                    "cwd": os.fspath(job.workspace),
+                    "approvalPolicy": "never",
+                    "sandbox": "workspace-write",
+                    "threadSource": "user",
+                    "serviceName": "linux-voice-assistant",
+                },
+            )
+            turn_start_id = 0
+
+            with job.events_path.open("ab") as events_file:
+                while True:
+                    line = await job._process.stdout.readline()
+                    if not line:
+                        if job.status == "cancelling":
+                            job.status = "cancelled"
+                            job.return_code = -15
+                        else:
+                            job.status = "failed"
+                            job.return_code = await job._process.wait()
+                            job.error = f"Codex app-server exited before the turn completed with code {job.return_code}"
+                        break
+
+                    events_file.write(line)
+                    events_file.flush()
+                    text = line.decode("utf-8", errors="replace")
+                    summary = summarize_app_server_event(text)
+                    if summary:
+                        job.last_event = summary
+
+                    try:
+                        event = json.loads(text)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+
+                    error = _json_rpc_error_message(event)
+                    if error:
+                        job.status = "failed"
+                        job.return_code = 1
+                        job.error = error
+                        break
+
+                    if event.get("id") == initialize_id:
+                        continue
+
+                    if event.get("id") == thread_start_id:
+                        thread_id = _extract_app_server_thread_id(event.get("result"))
+                        if not thread_id:
+                            job.status = "failed"
+                            job.return_code = 1
+                            job.error = "Codex app-server did not return a thread id."
+                            break
+                        job.app_server_thread_id = thread_id
+                        job.last_event = f"Codex app-server thread started: {thread_id}"
+                        turn_start_id = await send_request(
+                            "turn/start",
+                            {
+                                "threadId": thread_id,
+                                "cwd": os.fspath(job.workspace),
+                                "approvalPolicy": "never",
+                                "sandboxPolicy": {
+                                    "type": "workspaceWrite",
+                                    "writableRoots": [os.fspath(job.workspace)],
+                                    "networkAccess": True,
+                                    "excludeTmpdirEnvVar": False,
+                                    "excludeSlashTmp": False,
+                                },
+                                "input": [{"type": "text", "text": job.task, "text_elements": []}],
+                            },
+                        )
+                        continue
+
+                    if event.get("id") == turn_start_id:
+                        turn_id = _extract_app_server_turn_id(event.get("result"))
+                        if turn_id:
+                            job.app_server_turn_id = turn_id
+                            job.last_event = f"Codex app-server turn started: {turn_id}"
+                        continue
+
+                    method = str(event.get("method") or "")
+                    params = event.get("params") if isinstance(event.get("params"), dict) else {}
+                    if method == "turn/started":
+                        turn_id = _extract_app_server_turn_id(params)
+                        if turn_id:
+                            job.app_server_turn_id = turn_id
+                    elif method == "item/agentMessage/delta":
+                        delta = str(params.get("delta") or "")
+                        if delta:
+                            final_output += delta
+                            job.final_output = _limit_text(final_output, self._max_final_output_chars)
+                    elif method == "item/completed":
+                        item = params.get("item")
+                        if isinstance(item, dict) and item.get("type") == "agentMessage":
+                            item_text = str(item.get("text") or "")
+                            if item_text:
+                                final_output = item_text
+                                job.final_output = _limit_text(final_output, self._max_final_output_chars)
+                    elif method == "turn/completed":
+                        turn = params.get("turn")
+                        turn_status = str(turn.get("status") if isinstance(turn, dict) else "")
+                        if turn_status == "completed":
+                            job.status = "succeeded"
+                            job.return_code = 0
+                        elif job.status == "cancelling":
+                            job.status = "cancelled"
+                            job.return_code = -15
+                        else:
+                            job.status = "failed"
+                            job.return_code = 1
+                            if isinstance(turn, dict) and turn.get("error"):
+                                job.error = str(turn.get("error"))
+                            else:
+                                job.error = f"Codex app-server turn ended with status: {turn_status or 'unknown'}"
+                        break
+
+            if job.final_output:
+                job.final_output_path.write_text(job.final_output, encoding="utf-8")
+            if job._process.returncode is None:
+                job._process.terminate()
+                try:
+                    await asyncio.wait_for(job._process.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    job._process.kill()
+                    await job._process.wait()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stderr_task
+        except FileNotFoundError as err:
+            job.status = "failed"
+            job.error = f"Failed to start Codex app-server command: {err}"
+            _LOGGER.exception("Failed to start Codex app-server job %s", job.id)
+        except Exception as err:  # pylint: disable=broad-except
+            job.status = "failed"
+            job.error = str(err)
+            _LOGGER.exception("Codex app-server job %s crashed", job.id)
+        finally:
+            job.finished_at = time.time()
+            job._process = None
+            if self._active_job_id == job.id:
+                self._active_job_id = None
+            if not job.final_output:
+                job.final_output = _read_limited(job.stderr_path, self._max_final_output_chars)
+            if self._completion_callback is not None:
+                try:
+                    await self._completion_callback(job)
+                except Exception:  # pylint: disable=broad-except
+                    _LOGGER.exception("Codex completion callback failed for job %s", job.id)
+
+    async def _interrupt_app_server_job(self, job: CodexJob) -> None:
+        if job._process is None or job._process.stdin is None or not job.app_server_thread_id:
+            return
+        payload: dict[str, Any] = {"threadId": job.app_server_thread_id}
+        if job.app_server_turn_id:
+            payload["turnId"] = job.app_server_turn_id
+        try:
+            job._process.stdin.write(
+                (json.dumps({"id": int(time.time() * 1000), "method": "turn/interrupt", "params": payload}) + "\n").encode("utf-8")
+            )
+            await job._process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def _build_command(self, job: CodexJob) -> list[str]:
         if job.execution_mode == "host":
@@ -508,15 +724,95 @@ def summarize_codex_event(raw_line: str) -> str:
     return _compact(str(event))
 
 
+def summarize_app_server_event(raw_line: str) -> str:
+    stripped = raw_line.strip()
+    if not stripped:
+        return ""
+    try:
+        event = json.loads(stripped)
+    except json.JSONDecodeError:
+        return stripped[:500]
+    if not isinstance(event, dict):
+        return stripped[:500]
+    error = _json_rpc_error_message(event)
+    if error:
+        return error
+    method = str(event.get("method") or "").strip()
+    params = event.get("params") if isinstance(event.get("params"), dict) else {}
+    if method == "item/agentMessage/delta":
+        return "Codex is writing the final answer"
+    if method == "item/started":
+        item = params.get("item")
+        if isinstance(item, dict):
+            item_type = str(item.get("type") or "")
+            if item_type == "agentMessage":
+                return "Codex is drafting a response"
+            if item_type == "commandExecution":
+                command = item.get("command")
+                if isinstance(command, str) and command.strip():
+                    return _compact(f"Codex is running: {command}")
+    if method == "turn/started":
+        return "Codex turn started"
+    if method == "turn/completed":
+        turn = params.get("turn")
+        status = turn.get("status") if isinstance(turn, dict) else ""
+        return _compact(f"Codex turn completed: {status or 'unknown'}")
+    if method == "remoteControl/status/changed":
+        status = params.get("status")
+        return _compact(f"Codex cloud sync: {status}")
+    if method == "mcpServer/startupStatus/updated":
+        return _compact(f"MCP {params.get('name')}: {params.get('status')}")
+    if method == "warning" and isinstance(params.get("message"), str):
+        return _compact(str(params["message"]))
+    if method:
+        return _compact(method)
+    return _compact(str(event))
+
+
+def _json_rpc_error_message(event: dict[str, Any]) -> str:
+    error = event.get("error")
+    if error is None:
+        return ""
+    if isinstance(error, dict):
+        message = str(error.get("message") or error.get("code") or error)
+    else:
+        message = str(error)
+    return _compact(f"Codex app-server error: {message}")
+
+
+def _extract_app_server_thread_id(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    thread_id = result.get("threadId") or result.get("id")
+    if isinstance(thread_id, str) and thread_id:
+        return thread_id
+    thread = result.get("thread")
+    if isinstance(thread, dict) and isinstance(thread.get("id"), str):
+        return str(thread["id"])
+    return ""
+
+
+def _extract_app_server_turn_id(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    turn_id = result.get("turnId") or result.get("id")
+    if isinstance(turn_id, str) and turn_id:
+        return turn_id
+    turn = result.get("turn")
+    if isinstance(turn, dict) and isinstance(turn.get("id"), str):
+        return str(turn["id"])
+    return ""
+
+
 def _start_codex_task_tool() -> dict[str, Any]:
     return {
         "type": "function",
         "name": "start_codex_task",
         "description": (
             "Dispatch an asynchronous task to a Codex coding agent. Use when the user asks Codex or an agent to do software work. "
-            "Default to Docker execution. If the user does not name a repo or workspace, omit workspace so the configured default workspace is used. "
+            "Use the configured default Codex execution backend. If the user does not name a repo or workspace, omit workspace so the configured default workspace is used. "
             "Do not ask which repo unless the user explicitly refers to another repo ambiguously. "
-            "If the task needs host access outside Docker, ask the user for explicit confirmation first."
+            "If the task needs host access outside the configured default sandbox/container, ask the user for explicit confirmation first."
         ),
         "parameters": {
             "type": "object",
@@ -533,7 +829,7 @@ def _start_codex_task_tool() -> dict[str, Any]:
                     "type": "string",
                     "enum": ["docker", "host"],
                     "default": "docker",
-                    "description": "Run in Docker unless the user explicitly confirms host execution.",
+                    "description": "Request the default contained/sandboxed mode unless the user explicitly confirms host execution.",
                 },
                 "host_execution_confirmed": {
                     "type": "boolean",
@@ -586,6 +882,10 @@ def _read_limited(path: Path, limit: int) -> str:
     if not path.exists():
         return ""
     text = path.read_text(encoding="utf-8", errors="replace").strip()
+    return _limit_text(text, limit)
+
+
+def _limit_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 40].rstrip() + "\n[output truncated]"

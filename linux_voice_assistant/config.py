@@ -21,7 +21,7 @@ DEFAULT_INSTRUCTIONS = (
     "Use Home Assistant tools for smart-home state and control instead of guessing. "
     "When the user asks Codex or an agent to do software work, use the Codex tools. "
     "Codex tasks are asynchronous: acknowledge dispatch briefly, and use Codex status tools for follow-up questions about progress. "
-    "Run Codex in Docker by default. Ask for explicit confirmation before running Codex outside Docker. "
+    "Use the configured default Codex execution backend. Ask for explicit confirmation before running Codex outside the default sandbox/container. "
     "If the user does not specify a repo or workspace for Codex, omit the workspace field and use the configured default; do not ask which repo. "
     "When the user asks you to send text, links, or files to Discord, use the Discord tool. "
     "When the user asks to set a timer, use the timer tools; the assistant will notify the requesting device when the timer finishes. "
@@ -76,6 +76,8 @@ class AppConfig:
     codex_host_codex_home: Path
     codex_host_gh_config_dir: Path
     codex_host_command: str
+    codex_dispatch_mode: str
+    codex_app_server_command: str
     discord_enabled: bool
     discord_bot_token: str
     discord_client_id: str
@@ -134,6 +136,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-host-codex-home", help="Host Codex home mounted into the Codex Docker container")
     parser.add_argument("--codex-host-gh-config-dir", help="Host GitHub CLI config directory mounted into the Codex Docker container")
     parser.add_argument("--codex-host-command", help="Codex executable used for explicitly confirmed host-mode tasks")
+    parser.add_argument("--codex-dispatch-mode", choices=["exec", "app_server"], help="Codex dispatch backend: direct codex exec or Codex app-server")
+    parser.add_argument("--codex-app-server-command", help="Codex executable used for app-server dispatch")
     parser.add_argument("--discord-enabled", action="store_true", help="Enable the Discord bot bridge")
     parser.add_argument("--disable-discord", action="store_true", help="Disable the Discord bot bridge")
     parser.add_argument("--discord-bot-token", help="Discord bot token")
@@ -342,6 +346,18 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
         codex_host_codex_home=_coerce_path(_pick(args.codex_host_codex_home, os.getenv("LVA_CODEX_HOST_CODEX_HOME"), _get_path(yaml_config, "codex.host_codex_home"), Path.home() / ".codex")),
         codex_host_gh_config_dir=_coerce_path(_pick(args.codex_host_gh_config_dir, os.getenv("LVA_CODEX_HOST_GH_CONFIG_DIR"), _get_path(yaml_config, "codex.host_gh_config_dir"), Path.home() / ".config" / "gh")),
         codex_host_command=str(_pick(args.codex_host_command, os.getenv("LVA_CODEX_HOST_COMMAND"), _get_str(yaml_config, "codex.host_command"), "codex")),
+        codex_dispatch_mode=str(_pick(args.codex_dispatch_mode, os.getenv("LVA_CODEX_DISPATCH_MODE"), _get_str(yaml_config, "codex.dispatch_mode"), "exec")).strip().lower(),
+        codex_app_server_command=str(
+            _pick(
+                args.codex_app_server_command,
+                os.getenv("LVA_CODEX_APP_SERVER_COMMAND"),
+                _get_str(yaml_config, "codex.app_server_command"),
+                args.codex_host_command,
+                os.getenv("LVA_CODEX_HOST_COMMAND"),
+                _get_str(yaml_config, "codex.host_command"),
+                "codex",
+            )
+        ),
         discord_enabled=bool(_pick(discord_enabled, _env_bool("LVA_DISCORD_ENABLED"), _get_bool(yaml_config, "discord.enabled"), True)),
         discord_bot_token=str(_pick(args.discord_bot_token, _get_str(yaml_config, "discord.bot_token"), os.getenv("LVA_DISCORD_BOT_TOKEN"), os.getenv("DISCORD_BOT_TOKEN"), "")),
         discord_client_id=str(_pick(args.discord_client_id, os.getenv("LVA_DISCORD_CLIENT_ID"), _get_str(yaml_config, "discord.client_id"), "")),
