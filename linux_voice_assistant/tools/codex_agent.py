@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import shlex
+import shutil
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -221,6 +223,8 @@ class CodexJobManager:
         (job.job_dir / "command.txt").write_text(" ".join(shlex.quote(part) for part in command), encoding="utf-8")
 
         try:
+            if job.execution_mode == "docker":
+                self._check_docker_preflight(job)
             process_env = _codex_process_env()
             job._process = await asyncio.create_subprocess_exec(
                 *command,
@@ -291,6 +295,8 @@ class CodexJobManager:
             "-e",
             "HOME=/codex-home",
         ]
+        for group_id in _supplementary_group_ids():
+            command.extend(["--group-add", str(group_id)])
         command.extend(
             [
                 "-v",
@@ -310,7 +316,7 @@ class CodexJobManager:
                 "--output-last-message",
                 "/job/final.txt",
                 "--sandbox",
-                "workspace-write",
+                "danger-full-access",
                 "--skip-git-repo-check",
                 "-C",
                 "/workspace",
@@ -318,6 +324,56 @@ class CodexJobManager:
             ]
         )
         return command
+
+    def _check_docker_preflight(self, job: CodexJob) -> None:
+        problems = []
+        if shutil.which("docker") is None:
+            problems.append("docker executable was not found in PATH")
+        else:
+            try:
+                docker_check = subprocess.run(
+                    ["docker", "version", "--format", "{{.Server.Version}}"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if docker_check.returncode != 0:
+                    docker_error = docker_check.stderr.strip() or docker_check.stdout.strip()
+                    problems.append(f"Docker daemon is not reachable: {docker_error}")
+            except (OSError, subprocess.SubprocessError) as err:
+                problems.append(f"Docker daemon check failed: {err}")
+
+        for label, path, needs_write in (
+            ("workspace", job.workspace, True),
+            ("job directory", job.job_dir, True),
+            ("Codex home", self._host_codex_home.expanduser(), True),
+        ):
+            resolved = path.expanduser()
+            if not resolved.exists():
+                problems.append(f"{label} does not exist: {resolved}")
+                continue
+            access = os.R_OK | os.X_OK | (os.W_OK if needs_write else 0)
+            if not os.access(resolved, access):
+                try:
+                    stat_result = resolved.stat()
+                    detail = f"owner={stat_result.st_uid}:{stat_result.st_gid} mode={oct(stat_result.st_mode & 0o777)}"
+                except OSError as err:
+                    detail = f"stat failed: {err}"
+                problems.append(
+                    f"{label} is not accessible by uid {os.getuid()} gid {os.getgid()}: {resolved} {detail}"
+                )
+
+        if problems:
+            detail = "\n".join(f"- {problem}" for problem in problems)
+            message = (
+                "Docker Codex preflight failed:\n"
+                f"{detail}\n"
+                f"- effective uid/gid: {os.getuid()}:{os.getgid()}\n"
+                f"- supplementary groups: {_format_group_ids()}\n"
+            )
+            job.stderr_path.write_text(message, encoding="utf-8")
+            raise RuntimeError(message)
 
     async def _capture_stdout(self, job: CodexJob) -> None:
         assert job._process is not None
@@ -469,6 +525,14 @@ def _elapsed_seconds(job: CodexJob) -> float:
     start = job.started_at or job.created_at
     end = job.finished_at or time.time()
     return max(0.0, end - start)
+
+
+def _supplementary_group_ids() -> list[int]:
+    return sorted(set(os.getgroups()))
+
+
+def _format_group_ids() -> str:
+    return ", ".join(str(group_id) for group_id in _supplementary_group_ids()) or "none"
 
 
 def _codex_process_env() -> dict[str, str]:

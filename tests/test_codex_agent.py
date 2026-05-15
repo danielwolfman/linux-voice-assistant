@@ -1,5 +1,6 @@
 import asyncio
 
+from linux_voice_assistant.tools import codex_agent
 from linux_voice_assistant.tools.codex_agent import CodexJobManager, summarize_codex_event
 
 
@@ -54,7 +55,8 @@ def test_codex_manager_accepts_docker_job_and_reports_busy(tmp_path):
     asyncio.run(run())
 
 
-def test_codex_manager_uses_absolute_job_dir(tmp_path):
+def test_codex_manager_uses_absolute_job_dir_and_docker_container_boundary(tmp_path, monkeypatch):
+    monkeypatch.setattr(codex_agent.os, "getgroups", lambda: [115, 1000, 115])
     manager = CodexJobManager(
         jobs_dir=tmp_path / "relative" / ".." / "jobs",
         default_workspace=tmp_path,
@@ -68,4 +70,11 @@ def test_codex_manager_uses_absolute_job_dir(tmp_path):
     assert job.job_dir.is_absolute()
     assert f"{job.job_dir}:/job" in command
     assert "OPENAI_API_KEY" not in command
-    assert command[command.index("codex") + 1 : command.index("codex") + 4] == ["--ask-for-approval", "never", "exec"]
+    assert "--group-add" in command
+    assert command[command.index("--group-add") + 1] == "115"
+    assert command[command.index("--sandbox") + 1] == "danger-full-access"
+    assert command[command.index("codex") + 1 : command.index("codex") + 4] == [
+        "--ask-for-approval",
+        "never",
+        "exec",
+    ]
