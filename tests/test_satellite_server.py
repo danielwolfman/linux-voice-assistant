@@ -208,7 +208,25 @@ def test_codex_completion_notification_is_short_and_status_aware(tmp_path):
     notification = format_codex_completion_notification(job)
 
     assert "Codex finished job job-1" in notification
+    assert "Reply to the user in English" in notification
     assert "Changed files and tests pass" in notification
+
+
+def test_codex_completion_notification_uses_origin_language(tmp_path):
+    job = CodexJob(
+        id="job-1",
+        task="fix tests",
+        workspace=tmp_path,
+        execution_mode="docker",
+        origin_session_id="session-1",
+        origin_language="he",
+        status="succeeded",
+        final_output="Changed files and tests pass.",
+    )
+
+    notification = format_codex_completion_notification(job)
+
+    assert "Reply to the user in Hebrew" in notification
 
 
 def test_voice_session_registry_selects_origin_session(tmp_path):

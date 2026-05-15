@@ -87,7 +87,7 @@ class SessionController:
         self._interaction_memory = InteractionMemoryStore(config.download_dir / "interaction_memory.json")
         self._ha_tool_bridge = HomeAssistantToolBridge(config.ha_url, config.ha_token, verify_ssl=config.ha_verify_ssl)
         self._activity_logger = HomeAssistantActivityLogger(config.ha_url, config.ha_token, verify_ssl=config.ha_verify_ssl)
-        codex_agent = CodexAgentTool(codex_manager, session_id) if codex_manager is not None else None
+        codex_agent = CodexAgentTool(codex_manager, session_id, self._current_user_language) if codex_manager is not None else None
         timer_tool = TimerTool(timer_manager, session_id, self._ha_tool_bridge) if timer_manager is not None else None
         self._tool_registry = ToolRegistry(self._ha_tool_bridge, WebSearchTool(), codex_agent=codex_agent, timer_tool=timer_tool)
         self._tool_registry.set_enabled_tools(_enabled_tools_from_config(config))
@@ -207,7 +207,8 @@ class SessionController:
         await self._play_notification_cue(cue_sound)
         self._set_phase(SessionPhase.SESSION_STARTING)
         await self._realtime.create_text_response(
-            "Speak this async notification to the user in one to three short sentences, then stop listening: "
+            "Speak this async notification to the user in one to three short sentences. "
+            "If it asks for a target language, use that language. Then stop listening: "
             f"{notification}"
         )
         return True
@@ -603,6 +604,9 @@ class SessionController:
         self._interaction_memory.append(user=self._pending_user_transcript, assistant=assistant_transcript)
         self._pending_user_transcript = None
 
+    def _current_user_language(self) -> str:
+        return _detect_language(self._pending_user_transcript) if self._pending_user_transcript else ""
+
     async def _wait_for_output_drain(self, stall_timeout_seconds: float = 8.0) -> None:
         last_pending_samples = self._audio_player.pending_samples
         deadline = time.monotonic() + stall_timeout_seconds
@@ -673,6 +677,10 @@ def _turn_end_threshold(config: AppConfig) -> float:
 def _looks_like_question(transcript: str) -> bool:
     stripped = transcript.strip()
     return stripped.endswith("?") or stripped.endswith("؟")
+
+
+def _detect_language(text: str) -> str:
+    return "he" if any("\u0590" <= char <= "\u05ff" for char in text) else "en"
 
 
 def _realtime_error_sound_path(voice: str, reason: str) -> Optional[Path]:

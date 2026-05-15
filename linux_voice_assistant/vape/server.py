@@ -377,11 +377,18 @@ class VoiceSessionRegistry:
 
 
 def format_codex_completion_notification(job: CodexJob) -> str:
+    language = _codex_notification_language(job.origin_language)
     if job.status == "succeeded":
         result = job.final_output.strip() or "Codex finished without a final message."
-        return f"Codex finished job {job.id}. Summarize this result for speech: {result}"
+        return f"Codex finished job {job.id}. Reply to the user in {language}. Summarize this result for speech: {result}"
     detail = job.error or job.final_output or job.last_event or "No details were reported."
-    return f"Codex job {job.id} did not finish successfully. Status: {job.status}. Details: {detail}"
+    return f"Codex job {job.id} did not finish successfully. Reply to the user in {language}. Status: {job.status}. Details: {detail}"
+
+
+def _codex_notification_language(origin_language: str) -> str:
+    if origin_language == "he":
+        return "Hebrew"
+    return "English"
 
 
 def create_app(session_factory: SessionFactory, *, path: str = "/vape", on_session_closed: Optional[SessionClosedCallback] = None) -> web.Application:

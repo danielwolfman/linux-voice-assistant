@@ -8,7 +8,7 @@ from linux_voice_assistant.frontend import AssistantPlaybackSink
 from linux_voice_assistant.__main__ import _prepare_vape_server_config
 from linux_voice_assistant.memory import InteractionMemoryStore
 from linux_voice_assistant.realtime.client import _extract_assistant_transcript, classify_realtime_error
-from linux_voice_assistant.runtime.controller import SessionController, SessionPhase, _estimate_realtime_cost_usd, _looks_like_question, pcm16_rms
+from linux_voice_assistant.runtime.controller import SessionController, SessionPhase, _detect_language, _estimate_realtime_cost_usd, _looks_like_question, pcm16_rms
 
 
 def test_pcm16_rms_detects_signal_level():
@@ -59,6 +59,11 @@ def test_looks_like_question_detects_question_mark():
     assert _looks_like_question("Do you want me to turn it off?")
     assert _looks_like_question("האם לכבות את האור?")
     assert not _looks_like_question("I turned it off.")
+
+
+def test_detect_language_identifies_hebrew_and_defaults_to_english():
+    assert _detect_language("תבקש מקודקס לתקן את הטסטים") == "he"
+    assert _detect_language("ask codex to fix the tests") == "en"
 
 
 def test_classify_realtime_error_detects_quota_and_auth():

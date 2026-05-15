@@ -27,6 +27,7 @@ class CodexJob:
     workspace: Path
     execution_mode: str
     origin_session_id: Optional[str]
+    origin_language: str = ""
     status: str = "queued"
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
@@ -50,6 +51,7 @@ class CodexJob:
             "id": self.id,
             "status": self.status,
             "execution_mode": self.execution_mode,
+            "origin_language": self.origin_language,
             "workspace": os.fspath(self.workspace),
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -145,7 +147,14 @@ class CodexJobManager:
         if not workspace.is_dir():
             return {"status": "error", "error": f"Workspace is not a directory: {workspace}"}
 
-        job = self._create_job(task=task, workspace=workspace, execution_mode=execution_mode, origin_session_id=origin_session_id)
+        origin_language = _normalize_language(str(arguments.get("origin_language") or "")) or _detect_language(task)
+        job = self._create_job(
+            task=task,
+            workspace=workspace,
+            execution_mode=execution_mode,
+            origin_session_id=origin_session_id,
+            origin_language=origin_language,
+        )
         self._jobs[job.id] = job
         self._active_job_id = job.id
         asyncio.create_task(self._run_job(job))
@@ -193,7 +202,15 @@ class CodexJobManager:
             path = self._default_workspace / path
         return path.resolve()
 
-    def _create_job(self, *, task: str, workspace: Path, execution_mode: str, origin_session_id: Optional[str]) -> CodexJob:
+    def _create_job(
+        self,
+        *,
+        task: str,
+        workspace: Path,
+        execution_mode: str,
+        origin_session_id: Optional[str],
+        origin_language: str,
+    ) -> CodexJob:
         job_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
         job_dir = (self._jobs_dir / job_id).expanduser().resolve()
         job_dir.mkdir(parents=True, exist_ok=False)
@@ -203,6 +220,7 @@ class CodexJobManager:
             workspace=workspace,
             execution_mode=execution_mode,
             origin_session_id=origin_session_id,
+            origin_language=origin_language,
             job_dir=job_dir,
             final_output_path=job_dir / "final.txt",
             events_path=job_dir / "events.jsonl",
@@ -218,6 +236,7 @@ class CodexJobManager:
             "workspace": os.fspath(job.workspace),
             "execution_mode": job.execution_mode,
             "origin_session_id": job.origin_session_id,
+            "origin_language": job.origin_language,
             "created_at": job.created_at,
         }
         (job.job_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
@@ -442,14 +461,25 @@ class CodexJobManager:
 
 
 class CodexAgentTool:
-    def __init__(self, manager: CodexJobManager, origin_session_id: Optional[str]) -> None:
+    def __init__(
+        self,
+        manager: CodexJobManager,
+        origin_session_id: Optional[str],
+        origin_language_provider: Optional[Callable[[], str]] = None,
+    ) -> None:
         self._manager = manager
         self._origin_session_id = origin_session_id
+        self._origin_language_provider = origin_language_provider
 
     def tool_definitions(self) -> list[dict[str, Any]]:
         return self._manager.tool_definitions()
 
     async def execute_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if name == "start_codex_task" and not arguments.get("origin_language") and self._origin_language_provider is not None:
+            origin_language = self._origin_language_provider()
+            if origin_language:
+                arguments = dict(arguments)
+                arguments["origin_language"] = origin_language
         return await self._manager.execute_tool(name, arguments, origin_session_id=self._origin_session_id)
 
     async def close(self) -> None:
@@ -510,6 +540,11 @@ def _start_codex_task_tool() -> dict[str, Any]:
                     "default": False,
                     "description": "True only after the user clearly agreed to running Codex outside Docker for this task.",
                 },
+                "origin_language": {
+                    "type": "string",
+                    "enum": ["he", "en"],
+                    "description": "Language of the user's spoken request. Use he for Hebrew and en for English.",
+                },
             },
             "required": ["task"],
             "additionalProperties": False,
@@ -564,6 +599,19 @@ def _elapsed_seconds(job: CodexJob) -> float:
     start = job.started_at or job.created_at
     end = job.finished_at or time.time()
     return max(0.0, end - start)
+
+
+def _normalize_language(language: str) -> str:
+    normalized = language.strip().lower()
+    if normalized in {"he", "heb", "hebrew", "iw"}:
+        return "he"
+    if normalized in {"en", "eng", "english"}:
+        return "en"
+    return ""
+
+
+def _detect_language(text: str) -> str:
+    return "he" if any("\u0590" <= char <= "\u05ff" for char in text) else "en"
 
 
 def _supplementary_group_ids() -> list[int]:
