@@ -37,6 +37,7 @@ runtime:
     assert config.session_end_sound.endswith("mute_switch_on.flac")
     assert config.timer_finished_sound.endswith("timer_finished.flac")
     assert config.follow_up_after_tool_call is False
+    assert config.memory_interactions_count == 6
     assert config.enable_tool_get_entities is True
     assert config.enable_tool_get_state is True
     assert config.enable_tool_call_service is True
@@ -116,3 +117,27 @@ codex:
     assert config.codex_host_codex_home == codex_home
     assert config.codex_host_gh_config_dir == gh_config
     assert config.codex_host_command == "/home/daniel/.local/bin/codex"
+
+
+def test_load_config_reads_memory_interactions_count(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+home_assistant:
+  url: http://yaml.local:8123
+  token: yaml-token
+openai:
+  api_key: yaml-openai
+runtime:
+  memory_interactions_count: 12
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("HOME_ASSISTANT_URL", raising=False)
+    monkeypatch.delenv("HOME_ASSISTANT_TOKEN", raising=False)
+
+    config, _ = load_config(["--config", os.fspath(config_path)])
+
+    assert config.memory_interactions_count == 12

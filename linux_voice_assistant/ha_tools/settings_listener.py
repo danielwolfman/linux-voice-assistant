@@ -25,13 +25,17 @@ _REMOTE_KEYS = {
     "end_silence_seconds": float,
     "refractory_seconds": float,
     "follow_up_after_tool_call": bool,
+    "memory_interactions_count": int,
     "enable_tool_get_entities": bool,
     "enable_tool_get_state": bool,
     "enable_tool_call_service": bool,
     "enable_tool_web_search": bool,
 }
 
-_UNIQUE_ID_TO_KEY = {f"openai_real_time_assistant_{key}": key for key in _REMOTE_KEYS}
+_UNIQUE_ID_TO_KEY = {
+    **{f"openai_real_time_assistant_{key}": key for key in _REMOTE_KEYS},
+    **{f"realtime_satellite_{key}": key for key in _REMOTE_KEYS},
+}
 
 
 class HomeAssistantSettingsListener:

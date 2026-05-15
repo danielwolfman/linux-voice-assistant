@@ -47,6 +47,7 @@ runtime:
   min_speech_seconds: 0.2
   end_silence_seconds: 0.8
   follow_up_after_tool_call: false
+  memory_interactions_count: 6
 
 tools:
   enable_get_entities: true

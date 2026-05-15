@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+from linux_voice_assistant.memory import Interaction
 from linux_voice_assistant.realtime.client import OpenAIRealtimeClient
 
 
@@ -47,6 +48,38 @@ def test_instruction_change_updates_active_realtime_session():
 
         assert client._instructions == "new"
         assert updated == [{"instructions": "new"}]
+
+    asyncio.run(run())
+
+
+def test_memory_context_is_appended_to_session_instructions():
+    async def run():
+        updated = []
+
+        class FakeSession:
+            async def update(self, *, session):
+                updated.append(session)
+
+        client = object.__new__(OpenAIRealtimeClient)
+        client._model = "gpt-realtime"
+        client._voice = "coral"
+        client._instructions = "base instructions"
+        client._memory_context = ""
+        client._connection = SimpleNamespace(session=FakeSession())
+        client._tools = SimpleNamespace(tool_definitions=lambda: [])
+
+        await client.update_memory_context(
+            [
+                Interaction(user="turn one", assistant="answer one", timestamp="2026-05-15T00:00:00+00:00"),
+                Interaction(user="turn two", assistant="answer two", timestamp="2026-05-15T00:01:00+00:00"),
+            ]
+        )
+
+        instructions = updated[0]["instructions"]
+        assert instructions.startswith("base instructions")
+        assert "Recent interaction memory:" in instructions
+        assert "User: turn one" in instructions
+        assert "Assistant: answer two" in instructions
 
     asyncio.run(run())
 

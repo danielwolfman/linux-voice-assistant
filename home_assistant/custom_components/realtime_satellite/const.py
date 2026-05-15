@@ -41,6 +41,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "end_silence_seconds": 0.8,
     "refractory_seconds": 2.0,
     "follow_up_after_tool_call": False,
+    "memory_interactions_count": 6,
     "enable_tool_get_entities": True,
     "enable_tool_get_state": True,
     "enable_tool_call_service": True,
@@ -67,6 +68,7 @@ NUMBER_SETTINGS: dict[str, dict[str, object]] = {
     "min_speech_seconds": {"name": "Minimum Speech Duration", "min": 0.1, "max": 5.0, "step": 0.1, "unit": "s"},
     "end_silence_seconds": {"name": "End Silence Duration", "min": 0.1, "max": 5.0, "step": 0.1, "unit": "s"},
     "refractory_seconds": {"name": "Wake Word Refractory", "min": 0.0, "max": 10.0, "step": 0.1, "unit": "s"},
+    "memory_interactions_count": {"name": "Memory Interactions", "min": 0.0, "max": 25.0, "step": 1.0, "unit": None},
 }
 
 SWITCH_SETTINGS: dict[str, dict[str, object]] = {

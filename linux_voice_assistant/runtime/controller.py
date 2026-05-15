@@ -17,6 +17,7 @@ from ..frontend import AssistantPlaybackSink
 from ..ha_tools.activity_logger import HomeAssistantActivityLogger
 from ..ha_tools.client import HomeAssistantToolBridge
 from ..ha_tools.settings_listener import HomeAssistantSettingsListener
+from ..memory import InteractionMemoryStore
 from ..models import ServerState
 from ..mpv_player import MpvMediaPlayer
 from ..realtime.client import OpenAIRealtimeClient
@@ -80,8 +81,10 @@ class SessionController:
         self._tool_called_in_response_chain = False
         self._end_session_requested = False
         self._notification_response_active = False
+        self._pending_user_transcript: Optional[str] = None
         self._response_delay_task: Optional[asyncio.Task[None]] = None
         self._wakeup_sound_task: Optional[asyncio.Task[None]] = None
+        self._interaction_memory = InteractionMemoryStore(config.download_dir / "interaction_memory.json")
         self._ha_tool_bridge = HomeAssistantToolBridge(config.ha_url, config.ha_token, verify_ssl=config.ha_verify_ssl)
         self._activity_logger = HomeAssistantActivityLogger(config.ha_url, config.ha_token, verify_ssl=config.ha_verify_ssl)
         codex_agent = CodexAgentTool(codex_manager, session_id) if codex_manager is not None else None
@@ -279,6 +282,7 @@ class SessionController:
             return
 
         try:
+            await self._refresh_realtime_memory_context()
             await self._realtime.connect()
         except Exception:
             return
@@ -377,6 +381,8 @@ class SessionController:
             _LOGGER.debug("Ignoring intermediate response.done while awaiting additional tool or final answer")
             return
 
+        self._remember_completed_interaction(transcript)
+
         if self._response_delay_task is not None:
             self._response_delay_task.cancel()
 
@@ -427,6 +433,7 @@ class SessionController:
             self._realtime_error_in_progress = False
 
     async def _on_user_transcript(self, transcript: str) -> None:
+        self._pending_user_transcript = transcript
         await self._activity_logger.record_activity("user", transcript)
 
     async def _on_assistant_transcript(self, transcript: str) -> None:
@@ -582,6 +589,18 @@ class SessionController:
         self._tool_called_in_response_chain = False
         self._end_session_requested = False
         self._notification_response_active = False
+
+    async def _refresh_realtime_memory_context(self) -> None:
+        interactions = self._interaction_memory.load_recent(int(self.config.memory_interactions_count))
+        await self._realtime.update_memory_context(interactions)
+
+    def _remember_completed_interaction(self, assistant_transcript: str) -> None:
+        if self._notification_response_active:
+            return
+        if not self._pending_user_transcript or not assistant_transcript.strip():
+            return
+        self._interaction_memory.append(user=self._pending_user_transcript, assistant=assistant_transcript)
+        self._pending_user_transcript = None
 
     async def _wait_for_output_drain(self, stall_timeout_seconds: float = 8.0) -> None:
         last_pending_samples = self._audio_player.pending_samples

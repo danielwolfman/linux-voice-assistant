@@ -12,6 +12,7 @@ from typing import Any, Optional, Protocol, cast
 from openai import AsyncOpenAI
 
 from ..audio.pcm import resample_pcm16_mono
+from ..memory import Interaction
 
 
 class ToolProvider(Protocol):
@@ -49,6 +50,7 @@ class OpenAIRealtimeClient:
         self._model = model
         self._voice = voice
         self._instructions = instructions
+        self._memory_context = ""
         self._tools = tools
         self._on_audio_delta = on_audio_delta
         self._on_response_created = on_response_created
@@ -178,6 +180,13 @@ class OpenAIRealtimeClient:
         session_config: Any = self._build_session_config()
         await self._connection.session.update(session=session_config)
 
+    async def update_memory_context(self, interactions: list[Interaction]) -> None:
+        self._memory_context = _format_interaction_memory(interactions)
+        if self._connection is None:
+            return
+        session_config: Any = self._build_session_config()
+        await self._connection.session.update(session=session_config)
+
     async def _read_events(self) -> None:
         assert self._connection is not None
         try:
@@ -288,7 +297,7 @@ class OpenAIRealtimeClient:
         return {
             "type": "realtime",
             "model": self._model,
-            "instructions": self._instructions,
+            "instructions": self._effective_instructions(),
             "output_modalities": ["audio"],
             "audio": {
                 "output": {
@@ -304,6 +313,11 @@ class OpenAIRealtimeClient:
             "tools": self._tools.tool_definitions() + [_end_session_tool_definition()],
             "tool_choice": "auto",
         }
+
+    def _effective_instructions(self) -> str:
+        if not self._memory_context:
+            return self._instructions
+        return f"{self._instructions.rstrip()}\n\n{self._memory_context}"
 
     def _build_response_create_event(self) -> dict[str, Any]:
         return {
@@ -392,6 +406,25 @@ def _end_session_tool_definition() -> dict[str, Any]:
             "additionalProperties": False,
         },
     }
+
+
+def _format_interaction_memory(interactions: list[Interaction]) -> str:
+    if not interactions:
+        return ""
+
+    lines = [
+        "Recent interaction memory:",
+        "Use these previous user/assistant exchanges as context for continuity. Do not quote them unless relevant.",
+    ]
+    for index, interaction in enumerate(interactions, start=1):
+        lines.append(f"{index}. User: {_single_line(interaction.user)}")
+        lines.append(f"   Assistant: {_single_line(interaction.assistant)}")
+    return "\n".join(lines)
+
+
+def _single_line(value: str, limit: int = 1000) -> str:
+    text = " ".join(value.split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def _extract_assistant_transcript(item: Any) -> str:

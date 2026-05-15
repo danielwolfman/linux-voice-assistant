@@ -61,6 +61,7 @@ class AppConfig:
     min_speech_seconds: float
     end_silence_seconds: float
     follow_up_after_tool_call: bool
+    memory_interactions_count: int
     enable_tool_get_entities: bool
     enable_tool_get_state: bool
     enable_tool_call_service: bool
@@ -114,6 +115,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-silence-seconds", type=float, help="Silence duration that ends a turn")
     parser.add_argument("--follow-up-after-tool-call", action="store_true", help="Keep listening after a tool-backed response")
     parser.add_argument("--no-follow-up-after-tool-call", action="store_true", help="Return to wake-word mode after a tool-backed response")
+    parser.add_argument("--memory-interactions-count", type=int, help="Recent user/assistant interaction pairs loaded into context on wakeup")
     parser.add_argument("--enable-tool-codex-agent", action="store_true", help="Enable Codex agent tools")
     parser.add_argument("--disable-tool-codex-agent", action="store_true", help="Disable Codex agent tools")
     parser.add_argument("--enable-tool-timer", action="store_true", help="Enable timer tools")
@@ -291,6 +293,17 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
         min_speech_seconds=float(_pick(args.min_speech_seconds, _env_float("LVA_MIN_SPEECH_SECONDS"), _get_float(yaml_config, "runtime.min_speech_seconds"), 0.2)),
         end_silence_seconds=float(_pick(args.end_silence_seconds, _env_float("LVA_END_SILENCE_SECONDS"), _get_float(yaml_config, "runtime.end_silence_seconds"), 0.8)),
         follow_up_after_tool_call=bool(_pick(follow_up_after_tool_call, _env_bool("LVA_FOLLOW_UP_AFTER_TOOL_CALL"), _get_bool(yaml_config, "runtime.follow_up_after_tool_call"), False)),
+        memory_interactions_count=max(
+            0,
+            int(
+                _pick(
+                    args.memory_interactions_count,
+                    _env_int("LVA_MEMORY_INTERACTIONS_COUNT"),
+                    _get_int(yaml_config, "runtime.memory_interactions_count"),
+                    6,
+                )
+            ),
+        ),
         enable_tool_get_entities=bool(_pick(_env_bool("LVA_ENABLE_TOOL_GET_ENTITIES"), _get_bool(yaml_config, "tools.enable_get_entities"), True)),
         enable_tool_get_state=bool(_pick(_env_bool("LVA_ENABLE_TOOL_GET_STATE"), _get_bool(yaml_config, "tools.enable_get_state"), True)),
         enable_tool_call_service=bool(_pick(_env_bool("LVA_ENABLE_TOOL_CALL_SERVICE"), _get_bool(yaml_config, "tools.enable_call_service"), True)),

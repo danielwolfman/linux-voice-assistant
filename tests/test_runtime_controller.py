@@ -6,6 +6,7 @@ from linux_voice_assistant.audio.pcm import resample_pcm16_mono
 from linux_voice_assistant.config import AppConfig
 from linux_voice_assistant.frontend import AssistantPlaybackSink
 from linux_voice_assistant.__main__ import _prepare_vape_server_config
+from linux_voice_assistant.memory import InteractionMemoryStore
 from linux_voice_assistant.realtime.client import _extract_assistant_transcript, classify_realtime_error
 from linux_voice_assistant.runtime.controller import SessionController, SessionPhase, _estimate_realtime_cost_usd, _looks_like_question, pcm16_rms
 
@@ -138,6 +139,7 @@ def test_prepare_vape_server_config_keeps_backend_cues(tmp_path):
         min_speech_seconds=0.2,
         end_silence_seconds=0.5,
         follow_up_after_tool_call=False,
+        memory_interactions_count=6,
         enable_tool_get_entities=True,
         enable_tool_get_state=True,
         enable_tool_call_service=True,
@@ -274,3 +276,42 @@ def test_session_timeout_closes_quietly_without_end_sound():
     assert ("phase", SessionPhase.SESSION_TIMEOUT) in calls
     assert ("reset", None) in calls
     assert ("close", False) in calls
+
+
+def test_completed_response_persists_user_assistant_interaction(tmp_path):
+    controller = object.__new__(SessionController)
+    controller._notification_response_active = False
+    controller._pending_user_transcript = "Turn on the kitchen lights"
+    controller._interaction_memory = InteractionMemoryStore(tmp_path / "interaction_memory.json")
+
+    controller._remember_completed_interaction("Done.")
+
+    recent = controller._interaction_memory.load_recent(1)
+    assert len(recent) == 1
+    assert recent[0].user == "Turn on the kitchen lights"
+    assert recent[0].assistant == "Done."
+    assert controller._pending_user_transcript is None
+
+
+def test_refresh_realtime_memory_context_uses_configured_count(tmp_path):
+    async def run():
+        captured = []
+
+        class FakeRealtimeMemory:
+            async def update_memory_context(self, interactions):
+                captured.extend(interactions)
+
+        store = InteractionMemoryStore(tmp_path / "interaction_memory.json")
+        for index in range(4):
+            store.append(user=f"user {index}", assistant=f"assistant {index}")
+
+        controller = object.__new__(SessionController)
+        controller._interaction_memory = store
+        controller.config = SimpleNamespace(memory_interactions_count=2)
+        controller._realtime = FakeRealtimeMemory()
+
+        await controller._refresh_realtime_memory_context()
+
+        assert [interaction.user for interaction in captured] == ["user 2", "user 3"]
+
+    asyncio.run(run())
