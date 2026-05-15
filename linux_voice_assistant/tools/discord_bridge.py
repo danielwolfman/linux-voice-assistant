@@ -15,6 +15,8 @@ _LOGGER = logging.getLogger(__name__)
 DISCORD_ORIGIN_PREFIX = "discord:"
 _DISCORD_ID_RE = re.compile(r"\d{15,25}")
 _STILL_WORKING_SECONDS = 300
+_MAX_REPLY_CONTEXT_MESSAGES = 12
+_MAX_REPLY_CONTEXT_CHARS = 6000
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,13 @@ class DiscordJobContext:
     channel: Any
     message: Any
     still_working_task: Optional[asyncio.Task[None]] = None
+
+
+@dataclass(frozen=True)
+class DiscordContextMessage:
+    author: str
+    content: str
+    is_bot: bool = False
 
 
 def parse_discord_user_ids(value: object) -> list[str]:
@@ -197,15 +206,16 @@ class DiscordBotService:
         if not raw_content:
             return
 
-        if not _is_dm(message) and not self._mentions_bot(message):
+        if not _is_dm(message) and not self._mentions_bot(message) and not self._is_reply_to_bot(message):
             return
 
         content = self._strip_bot_mention(raw_content).strip()
         if not content:
             return
 
+        context_messages = await self._reply_context_messages(message)
         async with self._lock:
-            result = await self._execute_discord_command(author_id, content)
+            result = await self._execute_discord_command(author_id, content, context_messages)
         reply = result.get("reply")
         if isinstance(reply, str) and reply:
             await message.channel.send(reply)
@@ -225,7 +235,7 @@ class DiscordBotService:
         await self._react_accepted(message)
         self._remember_job_context(job_id, author_id, message)
 
-    async def _execute_discord_command(self, author_id: str, content: str) -> dict[str, Any]:
+    async def _execute_discord_command(self, author_id: str, content: str, context_messages: list[DiscordContextMessage] | None = None) -> dict[str, Any]:
         command = content.strip()
         command_key = command.lower()
         if command_key in {"help", "/help"}:
@@ -235,8 +245,9 @@ class DiscordBotService:
         if command_key in {"cancel", "/cancel"}:
             return {"reply": _format_status_result(await self._codex_manager.cancel_task(""))}
 
+        task = _build_codex_task(command, context_messages or [])
         result = await self._codex_manager.start_task(
-            {"task": command, "execution_mode": "docker"},
+            {"task": task, "execution_mode": "docker"},
             origin_session_id=discord_origin_session_id(author_id),
         )
         return {"start_result": result}
@@ -297,6 +308,76 @@ class DiscordBotService:
             return True
         return any(str(getattr(mention, "id", "") or "") == bot_id for mention in getattr(message, "mentions", []) or [])
 
+    def _is_reply_to_bot(self, message: Any) -> bool:
+        referenced = _resolved_reference_message(message)
+        return referenced is not None and self._is_bot_message(referenced)
+
+    def _is_bot_message(self, message: Any) -> bool:
+        author = getattr(message, "author", None)
+        if author is None:
+            return False
+        client_user = getattr(self._client, "user", None)
+        bot_id = str(getattr(client_user, "id", "") or self._client_id)
+        author_id = str(getattr(author, "id", "") or "")
+        return bool(bot_id and author_id == bot_id) or bool(getattr(author, "bot", False) and (not bot_id or author_id == bot_id))
+
+    async def _reply_context_messages(self, message: Any) -> list[DiscordContextMessage]:
+        chain: list[Any] = []
+        current = message
+        seen_ids: set[str] = set()
+        for _ in range(_MAX_REPLY_CONTEXT_MESSAGES + 1):
+            message_id = str(getattr(current, "id", "") or id(current))
+            if message_id in seen_ids:
+                break
+            seen_ids.add(message_id)
+            chain.append(current)
+            referenced = await self._fetch_referenced_message(current)
+            if referenced is None:
+                break
+            current = referenced
+
+        previous_messages = list(reversed(chain))[0:-1]
+        context_messages: list[DiscordContextMessage] = []
+        for item in previous_messages[-_MAX_REPLY_CONTEXT_MESSAGES:]:
+            context = self._context_message_from_discord_message(item)
+            if context is not None:
+                context_messages.append(context)
+        return context_messages
+
+    async def _fetch_referenced_message(self, message: Any) -> Any | None:
+        referenced = _resolved_reference_message(message)
+        if referenced is not None:
+            return referenced
+        reference = getattr(message, "reference", None)
+        message_id = getattr(reference, "message_id", None)
+        channel = getattr(message, "channel", None)
+        fetch_message = getattr(channel, "fetch_message", None)
+        if message_id is None or not callable(fetch_message):
+            return None
+        try:
+            return await fetch_message(message_id)
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.debug("Failed to fetch referenced Discord message %s", message_id, exc_info=True)
+            return None
+
+    def _context_message_from_discord_message(self, message: Any) -> DiscordContextMessage | None:
+        author = getattr(message, "author", None)
+        if author is None:
+            return None
+        author_id = str(getattr(author, "id", "") or "")
+        is_bot = self._is_bot_message(message)
+        if not is_bot and author_id not in self._allowed_user_ids:
+            return None
+
+        content = self._strip_bot_mention(str(getattr(message, "content", "") or "")).strip()
+        if not content:
+            return None
+        return DiscordContextMessage(
+            author=_display_author(author, is_bot=is_bot),
+            content=content,
+            is_bot=is_bot,
+        )
+
     def _strip_bot_mention(self, content: str) -> str:
         if not self._client_id:
             return content
@@ -347,6 +428,55 @@ class DiscordTool:
 def _is_dm(message: Any) -> bool:
     guild = getattr(message, "guild", None)
     return guild is None
+
+
+def _resolved_reference_message(message: Any) -> Any | None:
+    reference = getattr(message, "reference", None)
+    if reference is None:
+        return None
+    resolved = getattr(reference, "resolved", None)
+    return resolved if resolved is not None else None
+
+
+def _display_author(author: Any, *, is_bot: bool) -> str:
+    if is_bot:
+        return "Mycroft"
+    for attr in ("display_name", "global_name", "name"):
+        value = str(getattr(author, attr, "") or "").strip()
+        if value:
+            return value
+    return str(getattr(author, "id", "") or "user")
+
+
+def _build_codex_task(command: str, context_messages: list[DiscordContextMessage]) -> str:
+    if not context_messages:
+        return command
+    context = _format_reply_context(context_messages)
+    if not context:
+        return command
+    return (
+        "The user sent this Discord task as part of a reply chain. Use the previous Discord replies as context, "
+        "but treat the current Discord message as the task to perform.\n\n"
+        "Previous Discord replies, oldest to newest:\n"
+        f"{context}\n\n"
+        "Current Discord task:\n"
+        f"{command}"
+    )
+
+
+def _format_reply_context(context_messages: list[DiscordContextMessage]) -> str:
+    lines = []
+    remaining = _MAX_REPLY_CONTEXT_CHARS
+    for message in context_messages:
+        line = f"{message.author}: {message.content}"
+        if len(line) > remaining:
+            lines.append(line[: max(0, remaining - 24)].rstrip() + "\n[context truncated]")
+            break
+        lines.append(line)
+        remaining -= len(line) + 1
+        if remaining <= 0:
+            break
+    return "\n".join(lines).strip()
 
 
 def _format_start_result(result: dict[str, Any]) -> str:

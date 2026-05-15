@@ -154,6 +154,67 @@ async def _test_discord_sends_still_working_after_delay(monkeypatch):
     await service.close()
 
 
+def test_discord_reply_chain_is_passed_as_codex_context():
+    asyncio.run(_test_discord_reply_chain_is_passed_as_codex_context())
+
+
+async def _test_discord_reply_chain_is_passed_as_codex_context():
+    manager = FakeCodexManager({"status": "accepted", "job": {"id": "job-1", "status": "running"}})
+    service = DiscordBotService(
+        token="",
+        client_id="1504771552921518190",
+        allowed_user_ids="130283160301862913",
+        codex_manager=manager,  # type: ignore[arg-type]
+    )
+    channel = FakeChannel()
+    first_user = FakeMessage("130283160301862913", "please inspect this repo", channel=channel, message_id=1)
+    first_bot = FakeMessage("1504771552921518190", "I found the backend entrypoint.", channel=channel, message_id=2, bot=True, reference=first_user)
+    second_user = FakeMessage("130283160301862913", "check the discord bridge too", channel=channel, message_id=3, reference=first_bot)
+    second_bot = FakeMessage("1504771552921518190", "The bridge starts Codex jobs.", channel=channel, message_id=4, bot=True, reference=second_user)
+    current = FakeMessage(
+        "130283160301862913",
+        "now implement the missing tests",
+        channel=channel,
+        message_id=5,
+        reference=second_bot,
+    )
+
+    await service._handle_message(current)  # pylint: disable=protected-access
+    await service.close()
+
+    assert current.reactions == ["\N{EYES}"]
+    task = manager.started_with[1]
+    assert "Previous Discord replies, oldest to newest:" in task
+    assert "User 130283160301862913: please inspect this repo" in task
+    assert "Mycroft: I found the backend entrypoint." in task
+    assert "User 130283160301862913: check the discord bridge too" in task
+    assert "Mycroft: The bridge starts Codex jobs." in task
+    assert "Current Discord task:\nnow implement the missing tests" in task
+
+
+def test_discord_server_reply_to_bot_starts_codex_without_mention():
+    asyncio.run(_test_discord_server_reply_to_bot_starts_codex_without_mention())
+
+
+async def _test_discord_server_reply_to_bot_starts_codex_without_mention():
+    manager = FakeCodexManager({"status": "accepted", "job": {"id": "job-1", "status": "running"}})
+    service = DiscordBotService(
+        token="",
+        client_id="1504771552921518190",
+        allowed_user_ids="130283160301862913",
+        codex_manager=manager,  # type: ignore[arg-type]
+    )
+    channel = FakeChannel()
+    bot_reply = FakeMessage("1504771552921518190", "Done.", channel=channel, message_id=1, bot=True, guild=True)
+    user_reply = FakeMessage("130283160301862913", "continue with docs", channel=channel, message_id=2, reference=bot_reply, guild=True)
+
+    await service._handle_message(user_reply)  # pylint: disable=protected-access
+    await service.close()
+
+    assert user_reply.reactions == ["\N{EYES}"]
+    assert manager.started_with[1].endswith("Current Discord task:\ncontinue with docs")
+
+
 class FakeCodexManager:
     def __init__(self, start_result):
         self.start_result = start_result
@@ -179,11 +240,18 @@ class FakeChannel:
 
 
 class FakeMessage:
-    def __init__(self, user_id, content):
-        self.author = SimpleNamespace(id=user_id, bot=False)
+    def __init__(self, user_id, content, *, channel=None, message_id=1, bot=False, reference=None, guild=False):
+        self.id = message_id
+        self.author = SimpleNamespace(
+            id=user_id,
+            bot=bot,
+            display_name="Mycroft" if bot else f"User {user_id}",
+        )
         self.content = content
-        self.guild = None
-        self.channel = FakeChannel()
+        self.guild = object() if guild else None
+        self.channel = channel or FakeChannel()
+        self.reference = SimpleNamespace(resolved=reference, message_id=getattr(reference, "id", None)) if reference is not None else None
+        self.mentions = []
         self.reactions = []
 
     async def add_reaction(self, reaction):
