@@ -179,3 +179,28 @@ discord:
     assert config.discord_bot_token == "env-discord-token"
     assert config.discord_client_id == "1504771552921518190"
     assert config.discord_allowed_user_ids == "130283160301862913,468850569986179084"
+
+
+def test_load_config_prefers_discord_yaml_token_over_env(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+home_assistant:
+  url: http://yaml.local:8123
+  token: yaml-token
+openai:
+  api_key: yaml-openai
+discord:
+  bot_token: yaml-discord-token
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("HOME_ASSISTANT_URL", raising=False)
+    monkeypatch.delenv("HOME_ASSISTANT_TOKEN", raising=False)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "env-discord-token")
+
+    config, _ = load_config(["--config", os.fspath(config_path)])
+
+    assert config.discord_bot_token == "yaml-discord-token"

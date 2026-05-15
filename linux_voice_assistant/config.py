@@ -343,7 +343,7 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
         codex_host_gh_config_dir=_coerce_path(_pick(args.codex_host_gh_config_dir, os.getenv("LVA_CODEX_HOST_GH_CONFIG_DIR"), _get_path(yaml_config, "codex.host_gh_config_dir"), Path.home() / ".config" / "gh")),
         codex_host_command=str(_pick(args.codex_host_command, os.getenv("LVA_CODEX_HOST_COMMAND"), _get_str(yaml_config, "codex.host_command"), "codex")),
         discord_enabled=bool(_pick(discord_enabled, _env_bool("LVA_DISCORD_ENABLED"), _get_bool(yaml_config, "discord.enabled"), True)),
-        discord_bot_token=str(_pick(args.discord_bot_token, os.getenv("LVA_DISCORD_BOT_TOKEN"), os.getenv("DISCORD_BOT_TOKEN"), _get_str(yaml_config, "discord.bot_token"), "")),
+        discord_bot_token=str(_pick(args.discord_bot_token, _get_str(yaml_config, "discord.bot_token"), os.getenv("LVA_DISCORD_BOT_TOKEN"), os.getenv("DISCORD_BOT_TOKEN"), "")),
         discord_client_id=str(_pick(args.discord_client_id, os.getenv("LVA_DISCORD_CLIENT_ID"), _get_str(yaml_config, "discord.client_id"), "")),
         discord_allowed_user_ids=_coerce_string_list(
             _pick(
