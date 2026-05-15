@@ -19,6 +19,7 @@ from ..tools.timer import TimerRecord, format_timer_finished_notification
 from .protocol import ProtocolError, build_control, negotiate_audio_format, parse_control
 
 _LOGGER = logging.getLogger(__name__)
+_REMOTE_PLAYBACK_MAX_AHEAD_SECONDS = 0.75
 
 SendJson = Callable[[dict], Coroutine[Any, Any, None]]
 SendBinary = Callable[[bytes], Coroutine[Any, Any, None]]
@@ -53,18 +54,21 @@ class RemotePlaybackSink:
         self._send_json = send_json
         self._send_binary = send_binary
         self._playing_until = 0.0
+        self._queued_samples = 0
         self._started = False
         self._closed = False
+        self._audio_queue: asyncio.Queue[bytes] = asyncio.Queue()
+        self._sender_task: Optional[asyncio.Task[None]] = None
         self._file_task: Optional[asyncio.Task[None]] = None
 
     @property
     def is_playing(self) -> bool:
-        return not self._closed and time.monotonic() < self._playing_until
+        return not self._closed and (self._queued_samples > 0 or time.monotonic() < self._playing_until)
 
     @property
     def pending_samples(self) -> int:
         remaining_seconds = max(0.0, self._playing_until - time.monotonic())
-        return int(remaining_seconds * self._output_sample_rate)
+        return self._queued_samples + int(remaining_seconds * self._output_sample_rate)
 
     def set_volume(self, volume: float) -> None:
         del volume
@@ -72,7 +76,12 @@ class RemotePlaybackSink:
     def add_data(self, data: bytes) -> None:
         if self._closed or not data:
             return
-        asyncio.create_task(self._send_audio(data))
+        output = resample_pcm16_mono(data, source_rate=24000, target_rate=self._output_sample_rate)
+        if not output:
+            return
+        self._queued_samples += len(output) // 2
+        self._audio_queue.put_nowait(output)
+        self._ensure_sender_task()
 
     def play_file(self, path: str, done_callback: Optional[Callable[[], None]] = None) -> None:
         if self._closed:
@@ -94,6 +103,10 @@ class RemotePlaybackSink:
         if self._file_task is not None:
             self._file_task.cancel()
             self._file_task = None
+        if self._sender_task is not None:
+            self._sender_task.cancel()
+            self._sender_task = None
+        self._discard_queued_audio()
         self._playing_until = 0.0
         self._started = False
         if not self._closed:
@@ -107,7 +120,47 @@ class RemotePlaybackSink:
         if not self._closed:
             asyncio.create_task(self._send_json(build_control("set_state", state=state)))
 
-    async def _send_audio(self, data: bytes) -> None:
+    def _ensure_sender_task(self) -> None:
+        if self._sender_task is None or self._sender_task.done():
+            self._sender_task = asyncio.create_task(self._drain_audio_queue())
+
+    def _discard_queued_audio(self) -> None:
+        while True:
+            try:
+                output = self._audio_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            self._queued_samples = max(0, self._queued_samples - (len(output) // 2))
+            self._audio_queue.task_done()
+
+    async def _drain_audio_queue(self) -> None:
+        try:
+            while not self._closed:
+                output = await self._audio_queue.get()
+                try:
+                    await self._pace_output()
+                    if self._closed:
+                        return
+                    await self._send_output_audio(output)
+                finally:
+                    self._queued_samples = max(0, self._queued_samples - (len(output) // 2))
+                    self._audio_queue.task_done()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _LOGGER.exception("Remote playback audio sender failed")
+        finally:
+            if self._sender_task is asyncio.current_task():
+                self._sender_task = None
+
+    async def _pace_output(self) -> None:
+        while not self._closed:
+            buffered_seconds = self._playing_until - time.monotonic()
+            if buffered_seconds <= _REMOTE_PLAYBACK_MAX_AHEAD_SECONDS:
+                return
+            await asyncio.sleep(min(0.05, buffered_seconds - _REMOTE_PLAYBACK_MAX_AHEAD_SECONDS))
+
+    async def _send_output_audio(self, output: bytes) -> None:
         if not self._started:
             await self._send_json(
                 build_control(
@@ -117,7 +170,6 @@ class RemotePlaybackSink:
             )
             self._started = True
 
-        output = resample_pcm16_mono(data, source_rate=24000, target_rate=self._output_sample_rate)
         await self._send_binary(output)
         samples = len(output) // 2
         now = time.monotonic()
@@ -152,7 +204,8 @@ class RemotePlaybackSink:
             for offset in range(0, len(stdout), 4096):
                 if self._closed:
                     return
-                await self._send_audio(stdout[offset : offset + 4096])
+                self.add_data(stdout[offset : offset + 4096])
+            await self._audio_queue.join()
             await self._wait_for_playback_time()
             completed = True
         except asyncio.CancelledError:

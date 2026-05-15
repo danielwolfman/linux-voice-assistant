@@ -99,6 +99,43 @@ def test_remote_playback_sink_streams_audio_file(tmp_path):
     asyncio.run(_test_remote_playback_sink_streams_audio_file(tmp_path))
 
 
+def test_remote_playback_sink_serializes_audio_sends():
+    asyncio.run(_test_remote_playback_sink_serializes_audio_sends())
+
+
+async def _test_remote_playback_sink_serializes_audio_sends():
+    sent_binary = []
+    in_flight = 0
+    max_in_flight = 0
+
+    async def send_json(payload):
+        del payload
+
+    async def send_binary(payload):
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        await asyncio.sleep(0.02)
+        sent_binary.append(payload)
+        in_flight -= 1
+
+    sink = RemotePlaybackSink(
+        selected_input_format=PcmFormat(codec="pcm_s16le", sample_rate=24000, channels=1),
+        output_sample_rate=24000,
+        send_json=send_json,
+        send_binary=send_binary,
+    )
+
+    first = b"\x01\x00" * 120
+    second = b"\x02\x00" * 120
+    sink.add_data(first)
+    sink.add_data(second)
+    await asyncio.sleep(0.08)
+
+    assert max_in_flight == 1
+    assert sent_binary == [first, second]
+
+
 async def _test_remote_playback_sink_streams_audio_file(tmp_path):
     sound_file = tmp_path / "cue.wav"
     with wave.open(str(sound_file), "wb") as wav:
