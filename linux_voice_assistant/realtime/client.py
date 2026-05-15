@@ -414,7 +414,10 @@ def _format_interaction_memory(interactions: list[Interaction]) -> str:
 
     lines = [
         "Recent interaction memory:",
-        "Use these previous user/assistant exchanges as context for continuity. Do not quote them unless relevant.",
+        "These previous user/assistant exchanges are persistent memory loaded for this wakeup. "
+        "Use them as context for continuity.",
+        "If the user asks whether you remember previous chats or what you remember, answer from this memory. "
+        "Do not claim you have no chat memory while this section is present.",
     ]
     for index, interaction in enumerate(interactions, start=1):
         lines.append(f"{index}. User: {_single_line(interaction.user)}")

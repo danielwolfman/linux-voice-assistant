@@ -78,6 +78,7 @@ def test_memory_context_is_appended_to_session_instructions():
         instructions = updated[0]["instructions"]
         assert instructions.startswith("base instructions")
         assert "Recent interaction memory:" in instructions
+        assert "Do not claim you have no chat memory" in instructions
         assert "User: turn one" in instructions
         assert "Assistant: answer two" in instructions
 

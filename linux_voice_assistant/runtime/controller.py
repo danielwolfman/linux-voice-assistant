@@ -592,6 +592,7 @@ class SessionController:
 
     async def _refresh_realtime_memory_context(self) -> None:
         interactions = self._interaction_memory.load_recent(int(self.config.memory_interactions_count))
+        _LOGGER.info("Loaded %s recent interaction(s) into wakeup memory context", len(interactions))
         await self._realtime.update_memory_context(interactions)
 
     def _remember_completed_interaction(self, assistant_transcript: str) -> None:
