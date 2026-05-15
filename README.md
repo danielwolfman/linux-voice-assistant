@@ -146,6 +146,7 @@ For permanent deployment on a remote Linux server and for flashing additional VA
 - OpenAI usage/cost polling for last 1 hour and last 24 hours
 - per-tool enable/disable controls
 - async Codex agent task dispatch with spoken completion notifications
+- Discord DM/mention bridge for Codex tasks and assistant message delivery
 - optional Docker deployment
 
 ## Current Tool Surface
@@ -157,6 +158,7 @@ For permanent deployment on a remote Linux server and for flashing additional VA
 - `start_codex_task(task, workspace, execution_mode, host_execution_confirmed)`
 - `get_codex_status(job_id)`
 - `cancel_codex_task(job_id)`
+- `send_discord_message(message, user_ids)`
 
 ## Home Assistant Integration
 

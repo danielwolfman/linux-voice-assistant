@@ -29,6 +29,7 @@ def _options_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Optional("processing_sound", default=defaults["processing_sound"]): selector.TextSelector(),
             vol.Optional("tool_call_sound", default=defaults["tool_call_sound"]): selector.TextSelector(),
             vol.Optional("session_end_sound", default=defaults["session_end_sound"]): selector.TextSelector(),
+            vol.Optional("discord_allowed_user_ids", default=defaults["discord_allowed_user_ids"]): selector.TextSelector(),
             vol.Optional("session_timeout_seconds", default=defaults["session_timeout_seconds"]): selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=120, step=1, mode=selector.NumberSelectorMode.BOX)),
             vol.Optional("vad_threshold", default=defaults["vad_threshold"]): selector.NumberSelector(selector.NumberSelectorConfig(min=0.001, max=0.1, step=0.001, mode=selector.NumberSelectorMode.BOX)),
             vol.Optional("min_speech_seconds", default=defaults["min_speech_seconds"]): selector.NumberSelector(selector.NumberSelectorConfig(min=0.1, max=5, step=0.1, mode=selector.NumberSelectorMode.BOX)),
@@ -39,6 +40,7 @@ def _options_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Optional("enable_tool_get_state", default=defaults["enable_tool_get_state"]): selector.BooleanSelector(),
             vol.Optional("enable_tool_call_service", default=defaults["enable_tool_call_service"]): selector.BooleanSelector(),
             vol.Optional("enable_tool_web_search", default=defaults["enable_tool_web_search"]): selector.BooleanSelector(),
+            vol.Optional("enable_tool_discord", default=defaults["enable_tool_discord"]): selector.BooleanSelector(),
         }
     )
 

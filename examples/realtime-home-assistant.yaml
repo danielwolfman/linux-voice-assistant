@@ -35,6 +35,7 @@ openai:
     If the user indicates the conversation is over or asks you to stop listening, call end_session.
     For current events, internet information, public facts beyond Home Assistant, or external services, use web_search.
     When the user asks Codex or an agent to do software work without naming a repo, use the configured default workspace and do not ask which repo.
+    When the user asks you to send text or links to Discord, use Discord.
 
 home_assistant:
   url: http://homeassistant.local:8123
@@ -55,6 +56,16 @@ tools:
   enable_call_service: true
   enable_web_search: true
   enable_timer: true
+  enable_discord: true
+
+discord:
+  enabled: true
+  client_id: "1504771552921518190"
+  allowed_user_ids:
+    - "130283160301862913"
+    - "468850569986179084"
+  # Prefer DISCORD_BOT_TOKEN or LVA_DISCORD_BOT_TOKEN in the service environment.
+  # bot_token: your-discord-bot-token
 
 # frontend: local
 

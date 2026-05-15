@@ -46,6 +46,8 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "enable_tool_get_state": True,
     "enable_tool_call_service": True,
     "enable_tool_web_search": True,
+    "enable_tool_discord": True,
+    "discord_allowed_user_ids": "130283160301862913,468850569986179084",
 }
 
 TEXT_SETTINGS: dict[str, dict[str, object]] = {
@@ -53,6 +55,7 @@ TEXT_SETTINGS: dict[str, dict[str, object]] = {
     "processing_sound": {"name": "Processing Sound", "max": 255},
     "tool_call_sound": {"name": "Tool Call Sound", "max": 255},
     "session_end_sound": {"name": "Session End Sound", "max": 255},
+    "discord_allowed_user_ids": {"name": "Discord Allowed User IDs", "max": 500},
 }
 
 SELECT_SETTINGS: dict[str, dict[str, object]] = {
@@ -77,4 +80,5 @@ SWITCH_SETTINGS: dict[str, dict[str, object]] = {
     "enable_tool_get_state": {"name": "Enable Get State Tool"},
     "enable_tool_call_service": {"name": "Enable Call Service Tool"},
     "enable_tool_web_search": {"name": "Enable Web Search Tool"},
+    "enable_tool_discord": {"name": "Enable Discord Tool"},
 }

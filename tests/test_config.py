@@ -44,7 +44,10 @@ runtime:
     assert config.enable_tool_web_search is True
     assert config.enable_tool_codex_agent is True
     assert config.enable_tool_timer is True
+    assert config.enable_tool_discord is True
     assert config.codex_docker_image == "lva-codex-agent:latest"
+    assert config.discord_enabled is True
+    assert config.discord_allowed_user_ids == "130283160301862913,468850569986179084"
 
 
 def test_load_config_reads_vape_server_options(tmp_path, monkeypatch):
@@ -141,3 +144,38 @@ runtime:
     config, _ = load_config(["--config", os.fspath(config_path)])
 
     assert config.memory_interactions_count == 12
+
+
+def test_load_config_reads_discord_options(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+home_assistant:
+  url: http://yaml.local:8123
+  token: yaml-token
+openai:
+  api_key: yaml-openai
+tools:
+  enable_discord: false
+discord:
+  enabled: true
+  client_id: "1504771552921518190"
+  allowed_user_ids:
+    - "130283160301862913"
+    - "468850569986179084"
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("HOME_ASSISTANT_URL", raising=False)
+    monkeypatch.delenv("HOME_ASSISTANT_TOKEN", raising=False)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "env-discord-token")
+
+    config, _ = load_config(["--config", os.fspath(config_path)])
+
+    assert config.enable_tool_discord is False
+    assert config.discord_enabled is True
+    assert config.discord_bot_token == "env-discord-token"
+    assert config.discord_client_id == "1504771552921518190"
+    assert config.discord_allowed_user_ids == "130283160301862913,468850569986179084"

@@ -159,7 +159,9 @@ async def run_local_frontend(config: AppConfig, args) -> None:
 async def run_vape_server_frontend(config: AppConfig) -> None:
     from aiohttp import web
 
+    from .ha_tools.settings_listener import HomeAssistantSettingsListener
     from .tools.codex_agent import CodexJobManager
+    from .tools.discord_bridge import DiscordBotService, discord_user_id_from_origin
     from .vape.server import VoiceSessionRegistry, create_app, create_session_factory
 
     config = _prepare_vape_server_config(config)
@@ -175,6 +177,18 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
 
     loop = asyncio.get_running_loop()
     voice_sessions = VoiceSessionRegistry()
+
+    discord_service: DiscordBotService | None = None
+
+    async def notify_codex_job_finished(job) -> None:
+        if discord_user_id_from_origin(job.origin_session_id):
+            if discord_service is not None:
+                await discord_service.notify_codex_job_finished(job)
+            else:
+                _LOGGER.warning("Codex job %s originated from Discord but the Discord bridge is disabled", job.id)
+            return
+        await voice_sessions.notify_codex_job_finished(job)
+
     codex_manager = CodexJobManager(
         jobs_dir=config.codex_jobs_dir,
         default_workspace=config.codex_workspace_dir,
@@ -182,11 +196,31 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
         host_codex_home=config.codex_host_codex_home,
         host_gh_config_dir=config.codex_host_gh_config_dir,
         host_command=config.codex_host_command,
-        completion_callback=voice_sessions.notify_codex_job_finished,
+        completion_callback=notify_codex_job_finished,
+    )
+    discord_service = DiscordBotService(
+        token=config.discord_bot_token if config.discord_enabled else "",
+        client_id=config.discord_client_id,
+        allowed_user_ids=config.discord_allowed_user_ids,
+        codex_manager=codex_manager,
     )
     timer_manager = TimerManager(
         completion_callback=voice_sessions.notify_timer_finished,
         finished_sound=config.timer_finished_sound,
+    )
+
+    async def apply_discord_settings(settings: dict[str, object]) -> None:
+        value = settings.get("discord_allowed_user_ids")
+        if value is None:
+            return
+        object.__setattr__(config, "discord_allowed_user_ids", str(value))
+        discord_service.set_allowed_user_ids(value)
+
+    discord_settings_listener = HomeAssistantSettingsListener(
+        base_url=config.ha_url,
+        token=config.ha_token,
+        verify_ssl=config.ha_verify_ssl,
+        on_update=apply_discord_settings,
     )
 
     def make_controller(audio_player, selected_format, session_id):
@@ -199,6 +233,7 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
             input_sample_rate=selected_format.sample_rate,
             codex_manager=codex_manager,
             timer_manager=timer_manager,
+            discord_service=discord_service,
             session_id=session_id,
         )
         state.satellite = controller
@@ -219,12 +254,16 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
     await runner.setup()
     site = web.TCPSite(runner, config.vape_server_host, config.vape_server_port)
     await site.start()
+    await discord_service.start()
+    await discord_settings_listener.start()
     _LOGGER.info("VAPE satellite server listening on ws://%s:%s%s", config.vape_server_host, config.vape_server_port, config.vape_server_path)
     try:
         await asyncio.Event().wait()
     except KeyboardInterrupt:
         pass
     finally:
+        await discord_settings_listener.close()
+        await discord_service.close()
         await timer_manager.close()
         await codex_manager.close()
         await runner.cleanup()

@@ -30,6 +30,8 @@ _REMOTE_KEYS = {
     "enable_tool_get_state": bool,
     "enable_tool_call_service": bool,
     "enable_tool_web_search": bool,
+    "enable_tool_discord": bool,
+    "discord_allowed_user_ids": str,
 }
 
 _UNIQUE_ID_TO_KEY = {

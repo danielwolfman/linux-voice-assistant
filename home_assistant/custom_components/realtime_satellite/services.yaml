@@ -37,6 +37,11 @@ apply_settings:
       name: Session End Sound
       selector:
         text:
+    discord_allowed_user_ids:
+      name: Discord Allowed User IDs
+      description: Comma-separated Discord user IDs allowed to DM or mention the bot and receive assistant messages.
+      selector:
+        text:
     session_timeout_seconds:
       name: Session Timeout Seconds
       selector:
@@ -98,6 +103,10 @@ apply_settings:
         boolean:
     enable_tool_web_search:
       name: Enable Web Search Tool
+      selector:
+        boolean:
+    enable_tool_discord:
+      name: Enable Discord Tool
       selector:
         boolean:
 

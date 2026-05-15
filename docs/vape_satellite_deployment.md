@@ -96,6 +96,7 @@ tools:
   enable_web_search: true
   enable_codex_agent: true
   enable_timer: true
+  enable_discord: true
 
 codex:
   jobs_dir: local/codex_jobs
@@ -104,6 +105,13 @@ codex:
   host_codex_home: /home/YOUR_USER/.codex
   host_gh_config_dir: /home/YOUR_USER/.config/gh
   host_command: /home/YOUR_USER/.local/bin/codex
+
+discord:
+  enabled: true
+  client_id: "1504771552921518190"
+  allowed_user_ids:
+    - "130283160301862913"
+    - "468850569986179084"
 ```
 
 Keep secrets in environment variables or a local `.env` file that is not committed:
@@ -113,6 +121,7 @@ export OPENAI_API_KEY="..."
 export HOME_ASSISTANT_URL="http://homeassistant.local:8123"
 export HOME_ASSISTANT_TOKEN="..."
 export LVA_HA_VERIFY_SSL="false"
+export DISCORD_BOT_TOKEN="..."
 ```
 
 ## Timers
@@ -139,6 +148,12 @@ Log in to Codex as the same Linux user that runs the backend service:
 ```
 
 The Docker runner mounts only the selected workspace, the job log directory, `codex.host_codex_home`, and, when present, `codex.host_gh_config_dir`. It removes the backend service's OpenAI API environment variables before starting Codex, so Codex uses the mounted ChatGPT/Codex login by default. The Docker image includes GitHub CLI, and the mounted `gh` config lets containerized Codex use the same GitHub auth as the backend host. It runs `codex exec --json` non-interactively and writes the final agent message to the job directory. Inside Docker, Codex runs with `--sandbox danger-full-access` because the container is the isolation boundary; `workspace-write` can fail inside this container when Codex tries to create a nested sandbox namespace. Host execution is intentionally separate and still uses `workspace-write`: if the model thinks a task needs host access outside Docker, it should ask the user for explicit confirmation before calling the tool with `execution_mode: host`.
+
+## Discord Bridge
+
+When `discord.enabled` is true and `DISCORD_BOT_TOKEN` or `discord.bot_token` is configured, the backend starts a Discord bot alongside the VAPE server. Allowed users can DM the bot with Codex tasks, or mention it in a server channel. Server messages are ignored unless they mention the bot and the author is in `discord.allowed_user_ids`. Codex completions from Discord-originated jobs are returned by DM to the requesting Discord user.
+
+The assistant also exposes `send_discord_message` when `tools.enable_discord` is enabled. Voice requests such as "send me this link in Discord" are delivered by DM to the configured allowlist by default; the tool can target a subset of allowed Discord user IDs when needed. The allowlist is also available in the Home Assistant settings integration as a comma-separated text setting.
 
 The backend service user must be able to run Docker and access the mounted paths. Check this as the same user that runs the service:
 

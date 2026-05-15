@@ -22,6 +22,7 @@ from ..models import ServerState
 from ..mpv_player import MpvMediaPlayer
 from ..realtime.client import OpenAIRealtimeClient
 from ..tools.codex_agent import CodexAgentTool, CodexJobManager
+from ..tools.discord_bridge import DiscordBotService, DiscordTool
 from ..tools.registry import ToolRegistry
 from ..tools.timer import TimerManager, TimerTool
 from ..tools.web_search import WebSearchTool
@@ -53,6 +54,7 @@ class SessionController:
         input_sample_rate: int = 16000,
         codex_manager: Optional[CodexJobManager] = None,
         timer_manager: Optional[TimerManager] = None,
+        discord_service: Optional[DiscordBotService] = None,
         session_id: Optional[str] = None,
     ) -> None:
         self.state = state
@@ -89,7 +91,9 @@ class SessionController:
         self._activity_logger = HomeAssistantActivityLogger(config.ha_url, config.ha_token, verify_ssl=config.ha_verify_ssl)
         codex_agent = CodexAgentTool(codex_manager, session_id, self._current_user_language) if codex_manager is not None else None
         timer_tool = TimerTool(timer_manager, session_id, self._ha_tool_bridge) if timer_manager is not None else None
-        self._tool_registry = ToolRegistry(self._ha_tool_bridge, WebSearchTool(), codex_agent=codex_agent, timer_tool=timer_tool)
+        discord_tool = DiscordTool(discord_service) if discord_service is not None else None
+        self._discord_service = discord_service
+        self._tool_registry = ToolRegistry(self._ha_tool_bridge, WebSearchTool(), codex_agent=codex_agent, timer_tool=timer_tool, discord_tool=discord_tool)
         self._tool_registry.set_enabled_tools(_enabled_tools_from_config(config))
         from ..audio.realtime_player import RealtimeAudioPlayer
 
@@ -258,6 +262,8 @@ class SessionController:
                 new_voice = str(value)
             elif key == "openai_instructions":
                 new_instructions = str(value)
+            elif key == "discord_allowed_user_ids" and self._discord_service is not None:
+                self._discord_service.set_allowed_user_ids(value)
             elif key.startswith("enable_tool_"):
                 refresh_tools = True
 
@@ -766,6 +772,7 @@ def _enabled_tools_from_config(config: AppConfig) -> dict[str, bool]:
         "start_timer": config.enable_tool_timer,
         "get_timers": config.enable_tool_timer,
         "cancel_timer": config.enable_tool_timer,
+        "send_discord_message": config.enable_tool_discord,
     }
 
 

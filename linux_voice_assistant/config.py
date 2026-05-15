@@ -23,6 +23,7 @@ DEFAULT_INSTRUCTIONS = (
     "Codex tasks are asynchronous: acknowledge dispatch briefly, and use Codex status tools for follow-up questions about progress. "
     "Run Codex in Docker by default. Ask for explicit confirmation before running Codex outside Docker. "
     "If the user does not specify a repo or workspace for Codex, omit the workspace field and use the configured default; do not ask which repo. "
+    "When the user asks you to send text, links, or files to Discord, use the Discord tool. "
     "When the user asks to set a timer, use the timer tools; the assistant will notify the requesting device when the timer finishes. "
     "Ask a concise follow-up question when a device or area is ambiguous. "
     "Do not mention internal tool names, API calls, or hidden reasoning."
@@ -68,12 +69,17 @@ class AppConfig:
     enable_tool_web_search: bool
     enable_tool_codex_agent: bool
     enable_tool_timer: bool
+    enable_tool_discord: bool
     codex_jobs_dir: Path
     codex_workspace_dir: Path
     codex_docker_image: str
     codex_host_codex_home: Path
     codex_host_gh_config_dir: Path
     codex_host_command: str
+    discord_enabled: bool
+    discord_bot_token: str
+    discord_client_id: str
+    discord_allowed_user_ids: str
     frontend: str
     vape_server_host: str
     vape_server_port: int
@@ -120,12 +126,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--disable-tool-codex-agent", action="store_true", help="Disable Codex agent tools")
     parser.add_argument("--enable-tool-timer", action="store_true", help="Enable timer tools")
     parser.add_argument("--disable-tool-timer", action="store_true", help="Disable timer tools")
+    parser.add_argument("--enable-tool-discord", action="store_true", help="Enable Discord messaging tools")
+    parser.add_argument("--disable-tool-discord", action="store_true", help="Disable Discord messaging tools")
     parser.add_argument("--codex-jobs-dir", help="Directory for Codex job metadata and logs")
     parser.add_argument("--codex-workspace-dir", help="Default workspace for Codex tasks")
     parser.add_argument("--codex-docker-image", help="Docker image used for Codex agent tasks")
     parser.add_argument("--codex-host-codex-home", help="Host Codex home mounted into the Codex Docker container")
     parser.add_argument("--codex-host-gh-config-dir", help="Host GitHub CLI config directory mounted into the Codex Docker container")
     parser.add_argument("--codex-host-command", help="Codex executable used for explicitly confirmed host-mode tasks")
+    parser.add_argument("--discord-enabled", action="store_true", help="Enable the Discord bot bridge")
+    parser.add_argument("--disable-discord", action="store_true", help="Disable the Discord bot bridge")
+    parser.add_argument("--discord-bot-token", help="Discord bot token")
+    parser.add_argument("--discord-client-id", help="Discord bot application/client id")
+    parser.add_argument("--discord-allowed-user-ids", help="Comma-separated allowlist of Discord user ids")
     parser.add_argument("--frontend", choices=["local", "vape-server"], help="Audio frontend to run")
     parser.add_argument("--vape-server-host", help="Host/IP for the VAPE satellite WebSocket server")
     parser.add_argument("--vape-server-port", type=int, help="Port for the VAPE satellite WebSocket server")
@@ -211,6 +224,18 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
         enable_tool_timer = True
     elif args.disable_tool_timer:
         enable_tool_timer = False
+
+    enable_tool_discord = None
+    if args.enable_tool_discord:
+        enable_tool_discord = True
+    elif args.disable_tool_discord:
+        enable_tool_discord = False
+
+    discord_enabled = None
+    if args.discord_enabled:
+        discord_enabled = True
+    elif args.disable_discord:
+        discord_enabled = False
 
     config = AppConfig(
         name=_pick(args.name, os.getenv("LVA_NAME"), _get_str(yaml_config, "device.name"), None),
@@ -310,12 +335,24 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
         enable_tool_web_search=bool(_pick(_env_bool("LVA_ENABLE_TOOL_WEB_SEARCH"), _get_bool(yaml_config, "tools.enable_web_search"), True)),
         enable_tool_codex_agent=bool(_pick(enable_tool_codex_agent, _env_bool("LVA_ENABLE_TOOL_CODEX_AGENT"), _get_bool(yaml_config, "tools.enable_codex_agent"), True)),
         enable_tool_timer=bool(_pick(enable_tool_timer, _env_bool("LVA_ENABLE_TOOL_TIMER"), _get_bool(yaml_config, "tools.enable_timer"), True)),
+        enable_tool_discord=bool(_pick(enable_tool_discord, _env_bool("LVA_ENABLE_TOOL_DISCORD"), _get_bool(yaml_config, "tools.enable_discord"), True)),
         codex_jobs_dir=_coerce_path(_pick(args.codex_jobs_dir, os.getenv("LVA_CODEX_JOBS_DIR"), _get_path(yaml_config, "codex.jobs_dir"), _REPO_DIR / "local" / "codex_jobs")),
         codex_workspace_dir=_coerce_path(_pick(args.codex_workspace_dir, os.getenv("LVA_CODEX_WORKSPACE_DIR"), _get_path(yaml_config, "codex.workspace_dir"), _REPO_DIR)),
         codex_docker_image=str(_pick(args.codex_docker_image, os.getenv("LVA_CODEX_DOCKER_IMAGE"), _get_str(yaml_config, "codex.docker_image"), "lva-codex-agent:latest")),
         codex_host_codex_home=_coerce_path(_pick(args.codex_host_codex_home, os.getenv("LVA_CODEX_HOST_CODEX_HOME"), _get_path(yaml_config, "codex.host_codex_home"), Path.home() / ".codex")),
         codex_host_gh_config_dir=_coerce_path(_pick(args.codex_host_gh_config_dir, os.getenv("LVA_CODEX_HOST_GH_CONFIG_DIR"), _get_path(yaml_config, "codex.host_gh_config_dir"), Path.home() / ".config" / "gh")),
         codex_host_command=str(_pick(args.codex_host_command, os.getenv("LVA_CODEX_HOST_COMMAND"), _get_str(yaml_config, "codex.host_command"), "codex")),
+        discord_enabled=bool(_pick(discord_enabled, _env_bool("LVA_DISCORD_ENABLED"), _get_bool(yaml_config, "discord.enabled"), True)),
+        discord_bot_token=str(_pick(args.discord_bot_token, os.getenv("LVA_DISCORD_BOT_TOKEN"), os.getenv("DISCORD_BOT_TOKEN"), _get_str(yaml_config, "discord.bot_token"), "")),
+        discord_client_id=str(_pick(args.discord_client_id, os.getenv("LVA_DISCORD_CLIENT_ID"), _get_str(yaml_config, "discord.client_id"), "")),
+        discord_allowed_user_ids=_coerce_string_list(
+            _pick(
+                args.discord_allowed_user_ids,
+                os.getenv("LVA_DISCORD_ALLOWED_USER_IDS"),
+                _get(yaml_config, "discord.allowed_user_ids"),
+                "130283160301862913,468850569986179084",
+            )
+        ),
         frontend=str(_pick(args.frontend, os.getenv("LVA_FRONTEND"), _get_str(yaml_config, "frontend"), "local")),
         vape_server_host=str(_pick(args.vape_server_host, os.getenv("LVA_VAPE_SERVER_HOST"), _get_str(yaml_config, "vape_server.host"), "0.0.0.0")),
         vape_server_port=int(_pick(args.vape_server_port, _env_int("LVA_VAPE_SERVER_PORT"), _get_int(yaml_config, "vape_server.port"), 8765)),
@@ -393,6 +430,14 @@ def _coerce_path_list(value: Any) -> list[Path]:
     if isinstance(value, list):
         return [Path(item).expanduser() for item in value]
     raise ValueError(f"Unsupported path list value: {value!r}")
+
+
+def _coerce_string_list(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        return ",".join(str(item).strip() for item in value if str(item).strip())
+    return str(value).strip()
 
 
 def _env_bool(name: str) -> Optional[bool]:
