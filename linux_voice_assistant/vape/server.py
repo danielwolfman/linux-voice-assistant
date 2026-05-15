@@ -15,6 +15,7 @@ from aiohttp.client_exceptions import ClientConnectionResetError
 
 from ..audio.pcm import PcmFormat, resample_pcm16_mono
 from ..tools.codex_agent import CodexJob
+from ..tools.timer import TimerRecord, format_timer_finished_notification
 from .protocol import ProtocolError, build_control, negotiate_audio_format, parse_control
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,6 +31,12 @@ SessionActivityCallback = Callable[[str], None]
 class RemoteWakeWord:
     id: str
     wake_word: str
+
+
+@dataclass(frozen=True)
+class VoiceNotification:
+    text: str
+    cue_sound: Optional[str] = None
 
 
 class RemotePlaybackSink:
@@ -241,7 +248,7 @@ class VoiceSessionRegistry:
     def __init__(self) -> None:
         self._sessions: dict[str, object] = {}
         self._last_active_session_id: Optional[str] = None
-        self._pending_notifications: list[str] = []
+        self._pending_notifications: list[VoiceNotification] = []
 
     def register(self, session_id: str, controller: object) -> None:
         self._sessions[session_id] = controller
@@ -268,11 +275,20 @@ class VoiceSessionRegistry:
             self._last_active_session_id = session_id
 
     async def notify_codex_job_finished(self, job: CodexJob) -> None:
-        notification = format_codex_completion_notification(job)
+        notification = VoiceNotification(format_codex_completion_notification(job))
         target_session_id = self._select_target_session(job.origin_session_id)
         if target_session_id is None:
             self._pending_notifications.append(notification)
             _LOGGER.info("Queued Codex completion notification; no VAPE clients are connected")
+            return
+        asyncio.create_task(self._deliver_when_idle(target_session_id, notification))
+
+    async def notify_timer_finished(self, timer: TimerRecord) -> None:
+        notification = VoiceNotification(format_timer_finished_notification(timer), cue_sound=timer.finished_sound)
+        target_session_id = self._select_target_session(timer.origin_session_id)
+        if target_session_id is None:
+            self._pending_notifications.append(notification)
+            _LOGGER.info("Queued timer completion notification; no VAPE clients are connected")
             return
         asyncio.create_task(self._deliver_when_idle(target_session_id, notification))
 
@@ -285,7 +301,7 @@ class VoiceSessionRegistry:
             return next(reversed(self._sessions))
         return None
 
-    async def _deliver_when_idle(self, session_id: str, notification: str, *, timeout_seconds: float = 1800.0) -> None:
+    async def _deliver_when_idle(self, session_id: str, notification: VoiceNotification, *, timeout_seconds: float = 1800.0) -> None:
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
             controller = self._sessions.get(session_id)
@@ -299,7 +315,7 @@ class VoiceSessionRegistry:
             can_accept = getattr(controller, "can_accept_notification", None)
             speak = getattr(controller, "speak_notification", None)
             if callable(can_accept) and callable(speak) and can_accept():
-                delivered = await speak(notification)
+                delivered = await speak(notification.text, cue_sound=notification.cue_sound)
                 if delivered:
                     return
             await asyncio.sleep(0.5)

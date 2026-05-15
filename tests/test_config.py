@@ -35,12 +35,14 @@ runtime:
     assert config.processing_sound.endswith("processing.wav")
     assert config.tool_call_sound.endswith("tool_call_processing.wav")
     assert config.session_end_sound.endswith("mute_switch_on.flac")
+    assert config.timer_finished_sound.endswith("timer_finished.flac")
     assert config.follow_up_after_tool_call is False
     assert config.enable_tool_get_entities is True
     assert config.enable_tool_get_state is True
     assert config.enable_tool_call_service is True
     assert config.enable_tool_web_search is True
     assert config.enable_tool_codex_agent is True
+    assert config.enable_tool_timer is True
     assert config.codex_docker_image == "lva-codex-agent:latest"
 
 

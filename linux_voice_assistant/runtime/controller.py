@@ -22,6 +22,7 @@ from ..mpv_player import MpvMediaPlayer
 from ..realtime.client import OpenAIRealtimeClient
 from ..tools.codex_agent import CodexAgentTool, CodexJobManager
 from ..tools.registry import ToolRegistry
+from ..tools.timer import TimerManager, TimerTool
 from ..tools.web_search import WebSearchTool
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ class SessionController:
         audio_player: Optional[AssistantPlaybackSink] = None,
         input_sample_rate: int = 16000,
         codex_manager: Optional[CodexJobManager] = None,
+        timer_manager: Optional[TimerManager] = None,
         session_id: Optional[str] = None,
     ) -> None:
         self.state = state
@@ -83,7 +85,8 @@ class SessionController:
         self._ha_tool_bridge = HomeAssistantToolBridge(config.ha_url, config.ha_token, verify_ssl=config.ha_verify_ssl)
         self._activity_logger = HomeAssistantActivityLogger(config.ha_url, config.ha_token, verify_ssl=config.ha_verify_ssl)
         codex_agent = CodexAgentTool(codex_manager, session_id) if codex_manager is not None else None
-        self._tool_registry = ToolRegistry(self._ha_tool_bridge, WebSearchTool(), codex_agent=codex_agent)
+        timer_tool = TimerTool(timer_manager, session_id, self._ha_tool_bridge) if timer_manager is not None else None
+        self._tool_registry = ToolRegistry(self._ha_tool_bridge, WebSearchTool(), codex_agent=codex_agent, timer_tool=timer_tool)
         self._tool_registry.set_enabled_tools(_enabled_tools_from_config(config))
         from ..audio.realtime_player import RealtimeAudioPlayer
 
@@ -194,10 +197,11 @@ class SessionController:
     def can_accept_notification(self) -> bool:
         return self.phase == SessionPhase.IDLE and not self._wakeup_in_progress and not self._audio_player.is_playing
 
-    async def speak_notification(self, notification: str) -> bool:
+    async def speak_notification(self, notification: str, cue_sound: Optional[str] = None) -> bool:
         if not self.can_accept_notification():
             return False
         self._notification_response_active = True
+        await self._play_notification_cue(cue_sound)
         self._set_phase(SessionPhase.SESSION_STARTING)
         await self._realtime.create_text_response(
             "Speak this async notification to the user in one to three short sentences, then stop listening: "
@@ -553,6 +557,26 @@ class SessionController:
     def _on_realtime_error_sound_finished(self) -> None:
         self._error_sound_active = False
 
+    async def _play_notification_cue(self, cue_sound: Optional[str]) -> None:
+        if not cue_sound or not Path(cue_sound).exists():
+            return
+        finished = asyncio.Event()
+
+        def _done() -> None:
+            self.loop.call_soon_threadsafe(finished.set)
+
+        self._mic_suppressed_until = max(self._mic_suppressed_until, time.monotonic() + 0.75)
+        self._set_phase(SessionPhase.PLAYING_OUTPUT)
+        remote_play_file = getattr(self._audio_player, "play_file", None)
+        if callable(remote_play_file):
+            remote_play_file(cue_sound, done_callback=_done)
+        else:
+            self.state.tts_player.play(cue_sound, done_callback=_done)
+        try:
+            await asyncio.wait_for(finished.wait(), timeout=8)
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Timed out waiting for notification cue sound to finish: %s", cue_sound)
+
     def _reset_response_chain_state(self) -> None:
         self._tool_call_depth = 0
         self._tool_called_in_response_chain = False
@@ -711,6 +735,9 @@ def _enabled_tools_from_config(config: AppConfig) -> dict[str, bool]:
         "start_codex_task": config.enable_tool_codex_agent,
         "get_codex_status": config.enable_tool_codex_agent,
         "cancel_codex_task": config.enable_tool_codex_agent,
+        "start_timer": config.enable_tool_timer,
+        "get_timers": config.enable_tool_timer,
+        "cancel_timer": config.enable_tool_timer,
     }
 
 

@@ -22,6 +22,7 @@ DEFAULT_INSTRUCTIONS = (
     "When the user asks Codex or an agent to do software work, use the Codex tools. "
     "Codex tasks are asynchronous: acknowledge dispatch briefly, and use Codex status tools for follow-up questions about progress. "
     "Run Codex in Docker by default. Ask for explicit confirmation before running Codex outside Docker. "
+    "When the user asks to set a timer, use the timer tools; the assistant will notify the requesting device when the timer finishes. "
     "Ask a concise follow-up question when a device or area is ambiguous. "
     "Do not mention internal tool names, API calls, or hidden reasoning."
 )
@@ -43,6 +44,7 @@ class AppConfig:
     processing_sound: Optional[str]
     tool_call_sound: Optional[str]
     session_end_sound: Optional[str]
+    timer_finished_sound: Optional[str]
     preferences_file: Path
     debug: bool
     openai_api_key: str
@@ -63,6 +65,7 @@ class AppConfig:
     enable_tool_call_service: bool
     enable_tool_web_search: bool
     enable_tool_codex_agent: bool
+    enable_tool_timer: bool
     codex_jobs_dir: Path
     codex_workspace_dir: Path
     codex_docker_image: str
@@ -93,6 +96,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--processing-sound", help="Sound file played after the mic turn is committed")
     parser.add_argument("--tool-call-sound", help="Sound file looped while tool calls are in progress")
     parser.add_argument("--session-end-sound", help="Sound file played when the conversation ends")
+    parser.add_argument("--timer-finished-sound", help="Sound file played before a finished timer notification")
     parser.add_argument("--preferences-file", help="Path to preferences JSON file")
     parser.add_argument("--openai-model", help="OpenAI Realtime model")
     parser.add_argument("--openai-voice", help="OpenAI voice name")
@@ -110,6 +114,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-follow-up-after-tool-call", action="store_true", help="Return to wake-word mode after a tool-backed response")
     parser.add_argument("--enable-tool-codex-agent", action="store_true", help="Enable Codex agent tools")
     parser.add_argument("--disable-tool-codex-agent", action="store_true", help="Disable Codex agent tools")
+    parser.add_argument("--enable-tool-timer", action="store_true", help="Enable timer tools")
+    parser.add_argument("--disable-tool-timer", action="store_true", help="Disable timer tools")
     parser.add_argument("--codex-jobs-dir", help="Directory for Codex job metadata and logs")
     parser.add_argument("--codex-workspace-dir", help="Default workspace for Codex tasks")
     parser.add_argument("--codex-docker-image", help="Docker image used for Codex agent tasks")
@@ -195,6 +201,12 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
     elif args.disable_tool_codex_agent:
         enable_tool_codex_agent = False
 
+    enable_tool_timer = None
+    if args.enable_tool_timer:
+        enable_tool_timer = True
+    elif args.disable_tool_timer:
+        enable_tool_timer = False
+
     config = AppConfig(
         name=_pick(args.name, os.getenv("LVA_NAME"), _get_str(yaml_config, "device.name"), None),
         config_path=yaml_path,
@@ -255,6 +267,12 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
             _get_str(yaml_config, "audio.session_end_sound"),
             str(_SOUNDS_DIR / "mute_switch_on.flac"),
         ),
+        timer_finished_sound=_pick(
+            args.timer_finished_sound,
+            os.getenv("LVA_TIMER_FINISHED_SOUND"),
+            _get_str(yaml_config, "audio.timer_finished_sound"),
+            str(_SOUNDS_DIR / "timer_finished.flac"),
+        ),
         preferences_file=_coerce_path(_pick(args.preferences_file, os.getenv("LVA_PREFERENCES_FILE"), _get_path(yaml_config, "device.preferences_file"), _REPO_DIR / "preferences.json")),
         debug=bool(_pick(args.debug, _env_bool("LVA_DEBUG"), _get_bool(yaml_config, "device.debug"), False)),
         openai_api_key=openai_api_key,
@@ -275,6 +293,7 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
         enable_tool_call_service=bool(_pick(_env_bool("LVA_ENABLE_TOOL_CALL_SERVICE"), _get_bool(yaml_config, "tools.enable_call_service"), True)),
         enable_tool_web_search=bool(_pick(_env_bool("LVA_ENABLE_TOOL_WEB_SEARCH"), _get_bool(yaml_config, "tools.enable_web_search"), True)),
         enable_tool_codex_agent=bool(_pick(enable_tool_codex_agent, _env_bool("LVA_ENABLE_TOOL_CODEX_AGENT"), _get_bool(yaml_config, "tools.enable_codex_agent"), True)),
+        enable_tool_timer=bool(_pick(enable_tool_timer, _env_bool("LVA_ENABLE_TOOL_TIMER"), _get_bool(yaml_config, "tools.enable_timer"), True)),
         codex_jobs_dir=_coerce_path(_pick(args.codex_jobs_dir, os.getenv("LVA_CODEX_JOBS_DIR"), _get_path(yaml_config, "codex.jobs_dir"), _REPO_DIR / "local" / "codex_jobs")),
         codex_workspace_dir=_coerce_path(_pick(args.codex_workspace_dir, os.getenv("LVA_CODEX_WORKSPACE_DIR"), _get_path(yaml_config, "codex.workspace_dir"), _REPO_DIR)),
         codex_docker_image=str(_pick(args.codex_docker_image, os.getenv("LVA_CODEX_DOCKER_IMAGE"), _get_str(yaml_config, "codex.docker_image"), "lva-codex-agent:latest")),

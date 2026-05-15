@@ -60,6 +60,7 @@ audio:
   processing_sound: sounds/processing.wav
   tool_call_sound: sounds/tool_call_processing.wav
   session_end_sound: sounds/mute_switch_on.flac
+  timer_finished_sound: sounds/timer_finished.flac
   wake_word_dirs:
     - wakewords
 
@@ -93,6 +94,7 @@ tools:
   enable_call_service: true
   enable_web_search: true
   enable_codex_agent: true
+  enable_timer: true
 
 codex:
   jobs_dir: local/codex_jobs
@@ -110,6 +112,12 @@ export HOME_ASSISTANT_URL="http://homeassistant.local:8123"
 export HOME_ASSISTANT_TOKEN="..."
 export LVA_HA_VERIFY_SSL="false"
 ```
+
+## Timers
+
+When `tools.enable_timer` is enabled, the assistant exposes timer tools to the Realtime model. Users can say "set a pasta timer for ten minutes"; the backend starts a local asynchronous timer and later speaks a completion notification back to the VAPE or Windows front that requested it. The backend local timer is the source of truth for voice notification delivery, so timer completion still works when Home Assistant has no timer helper.
+
+If Home Assistant has exactly one idle timer entity, a voice-assistant-named timer entity such as `timer.voice_assistant`, or the model provides an exact `home_assistant_entity_id`, the tool also mirrors the timer with `timer.start`. If multiple unrelated Home Assistant timer entities exist, the backend timer runs alone to avoid overwriting the wrong helper.
 
 ## Codex Agent Tasks
 

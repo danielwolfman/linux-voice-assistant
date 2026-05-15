@@ -10,6 +10,7 @@ audio:
   processing_sound: sounds/processing.wav
   tool_call_sound: sounds/tool_call_processing.wav
   session_end_sound: sounds/mute_switch_on.flac
+  timer_finished_sound: sounds/timer_finished.flac
   wake_word_dirs:
     - wakewords
 
@@ -51,6 +52,7 @@ tools:
   enable_get_state: true
   enable_call_service: true
   enable_web_search: true
+  enable_timer: true
 
 # frontend: local
 

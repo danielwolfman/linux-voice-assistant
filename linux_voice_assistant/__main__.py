@@ -23,6 +23,7 @@ from .config import AppConfig, load_config
 from .models import AvailableWakeWord, Preferences, ServerState, WakeWordType
 from .mpv_player import MpvMediaPlayer
 from .runtime.controller import SessionController
+from .tools.timer import TimerManager, TimerRecord, format_timer_finished_notification
 from .util import get_default_interface, get_version
 
 _LOGGER = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ async def run_local_frontend(config: AppConfig, args) -> None:
         music_player=MpvMediaPlayer(),
         tts_player=MpvMediaPlayer(),
         wakeup_sound=config.wakeup_sound or "",
-        timer_finished_sound="",
+        timer_finished_sound=config.timer_finished_sound or "",
         processing_sound=config.processing_sound or "",
         mute_sound="",
         unmute_sound="",
@@ -121,7 +122,19 @@ async def run_local_frontend(config: AppConfig, args) -> None:
     state.tts_player.set_volume(initial_volume_percent)
 
     loop = asyncio.get_running_loop()
-    controller = SessionController(state=state, config=config, loop=loop)
+    controller_ref: dict[str, SessionController] = {}
+
+    async def notify_timer_finished(timer: TimerRecord) -> None:
+        controller = controller_ref.get("controller")
+        if controller is not None:
+            await controller.speak_notification(format_timer_finished_notification(timer), cue_sound=timer.finished_sound)
+
+    timer_manager = TimerManager(
+        completion_callback=notify_timer_finished,
+        finished_sound=config.timer_finished_sound,
+    )
+    controller = SessionController(state=state, config=config, loop=loop, timer_manager=timer_manager)
+    controller_ref["controller"] = controller
     await controller.start()
     state.satellite = controller
 
@@ -138,6 +151,7 @@ async def run_local_frontend(config: AppConfig, args) -> None:
         pass
     finally:
         state.audio_queue.put_nowait(None)
+        await timer_manager.close()
         await controller.shutdown()
         process_audio_thread.join()
 
@@ -169,6 +183,10 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
         host_command=config.codex_host_command,
         completion_callback=voice_sessions.notify_codex_job_finished,
     )
+    timer_manager = TimerManager(
+        completion_callback=voice_sessions.notify_timer_finished,
+        finished_sound=config.timer_finished_sound,
+    )
 
     def make_controller(audio_player, selected_format, session_id):
         state = build_server_state_for_vape(config, preferences)
@@ -179,6 +197,7 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
             audio_player=audio_player,
             input_sample_rate=selected_format.sample_rate,
             codex_manager=codex_manager,
+            timer_manager=timer_manager,
             session_id=session_id,
         )
         state.satellite = controller
@@ -205,6 +224,7 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        await timer_manager.close()
         await codex_manager.close()
         await runner.cleanup()
 
@@ -253,7 +273,7 @@ def build_server_state_for_vape(config: AppConfig, preferences: Preferences) -> 
         music_player=music_player,
         tts_player=tts_player,
         wakeup_sound=config.wakeup_sound or "",
-        timer_finished_sound="",
+        timer_finished_sound=config.timer_finished_sound or "",
         processing_sound=config.processing_sound or "",
         mute_sound="",
         unmute_sound="",

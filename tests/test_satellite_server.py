@@ -5,6 +5,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from linux_voice_assistant.audio.pcm import PcmFormat
 from linux_voice_assistant.tools.codex_agent import CodexJob
+from linux_voice_assistant.tools.timer import TimerRecord
 from linux_voice_assistant.vape.server import RemotePlaybackSink, SatelliteSessionHandler, VoiceSessionRegistry, create_app, create_session_factory, format_codex_completion_notification
 
 
@@ -185,8 +186,8 @@ async def _test_voice_session_registry_selects_origin_session(tmp_path):
         def can_accept_notification(self):
             return True
 
-        async def speak_notification(self, notification):
-            self.notifications.append(notification)
+        async def speak_notification(self, notification, cue_sound=None):
+            self.notifications.append((notification, cue_sound))
             return True
 
     registry = VoiceSessionRegistry()
@@ -209,4 +210,44 @@ async def _test_voice_session_registry_selects_origin_session(tmp_path):
     await asyncio.sleep(0.01)
 
     assert origin.notifications
+    assert other.notifications == []
+
+
+def test_voice_session_registry_routes_timer_finished_notification(tmp_path):
+    asyncio.run(_test_voice_session_registry_routes_timer_finished_notification(tmp_path))
+
+
+async def _test_voice_session_registry_routes_timer_finished_notification(tmp_path):
+    del tmp_path
+
+    class IdleController:
+        def __init__(self):
+            self.notifications = []
+
+        def can_accept_notification(self):
+            return True
+
+        async def speak_notification(self, notification, cue_sound=None):
+            self.notifications.append((notification, cue_sound))
+            return True
+
+    registry = VoiceSessionRegistry()
+    origin = IdleController()
+    other = IdleController()
+    registry.register("origin", origin)
+    registry.register("other", other)
+
+    timer = TimerRecord(
+        id="timer-1",
+        duration_seconds=60,
+        label="pasta",
+        origin_session_id="origin",
+        status="finished",
+        finished_sound="/tmp/timer_finished.flac",
+    )
+
+    await registry.notify_timer_finished(timer)
+    await asyncio.sleep(0.01)
+
+    assert origin.notifications == [("The pasta timer is done.", "/tmp/timer_finished.flac")]
     assert other.notifications == []
