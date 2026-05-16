@@ -100,22 +100,35 @@ class CodexJobManager:
         return [_start_codex_task_tool(), _get_codex_status_tool(), _cancel_codex_task_tool()]
 
     async def close(self) -> None:
-        active_job = self.active_job()
-        if active_job and active_job._process and active_job._process.returncode is None:
-            active_job.status = "cancelling"
-            active_job._process.terminate()
-            try:
-                await asyncio.wait_for(active_job._process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                active_job._process.kill()
+        for active_job in self._active_jobs():
+            if active_job._process and active_job._process.returncode is None:
+                active_job.status = "cancelling"
+                active_job._process.terminate()
+                try:
+                    await asyncio.wait_for(active_job._process.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    active_job._process.kill()
 
     def active_job(self) -> Optional[CodexJob]:
         if self._active_job_id is None:
-            return None
+            return self._latest_active_job()
         job = self._jobs.get(self._active_job_id)
         if job is None or not job.is_active:
-            return None
+            return self._latest_active_job()
         return job
+
+    def _active_jobs(self) -> list[CodexJob]:
+        return [job for job in self._jobs.values() if job.is_active]
+
+    def _latest_active_job(self) -> Optional[CodexJob]:
+        active_jobs = self._active_jobs()
+        if not active_jobs:
+            return None
+        return active_jobs[-1]
+
+    def _refresh_active_job_id(self) -> None:
+        latest_active = self._latest_active_job()
+        self._active_job_id = latest_active.id if latest_active is not None else None
 
     async def execute_tool(self, name: str, arguments: dict[str, Any], *, origin_session_id: Optional[str]) -> dict[str, Any]:
         if name == "start_codex_task":
@@ -126,9 +139,9 @@ class CodexJobManager:
             return await self.cancel_task(str(arguments.get("job_id") or ""))
         raise ValueError(f"Unsupported Codex tool: {name}")
 
-    async def start_task(self, arguments: dict[str, Any], *, origin_session_id: Optional[str]) -> dict[str, Any]:
+    async def start_task(self, arguments: dict[str, Any], *, origin_session_id: Optional[str], allow_parallel: bool = False) -> dict[str, Any]:
         active_job = self.active_job()
-        if active_job is not None:
+        if active_job is not None and not allow_parallel:
             return {
                 "status": "busy",
                 "active_job": active_job.as_tool_result(),
@@ -298,7 +311,7 @@ class CodexJobManager:
             job.finished_at = time.time()
             job._process = None
             if self._active_job_id == job.id:
-                self._active_job_id = None
+                self._refresh_active_job_id()
             if not job.final_output:
                 job.final_output = _read_limited(job.stderr_path, self._max_final_output_chars)
             if self._completion_callback is not None:
@@ -481,7 +494,7 @@ class CodexJobManager:
             job.finished_at = time.time()
             job._process = None
             if self._active_job_id == job.id:
-                self._active_job_id = None
+                self._refresh_active_job_id()
             if not job.final_output:
                 job.final_output = _read_limited(job.stderr_path, self._max_final_output_chars)
             if self._completion_callback is not None:

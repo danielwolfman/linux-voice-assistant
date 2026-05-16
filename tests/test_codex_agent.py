@@ -61,6 +61,40 @@ def test_codex_manager_accepts_docker_job_and_reports_busy(tmp_path):
     asyncio.run(run())
 
 
+def test_codex_manager_allows_parallel_jobs_when_requested(tmp_path):
+    async def run():
+        manager = CodexJobManager(
+            jobs_dir=tmp_path / "jobs",
+            default_workspace=tmp_path,
+            docker_image="lva-codex-agent:latest",
+            host_codex_home=tmp_path / ".codex",
+        )
+        started = []
+        release = asyncio.Event()
+
+        async def fake_run(job):
+            started.append(job)
+            job.status = "running"
+            await release.wait()
+            job.status = "succeeded"
+
+        manager._run_job = fake_run
+
+        first = await manager.start_task({"task": "inspect the repo"}, origin_session_id="discord:1", allow_parallel=True)
+        second = await manager.start_task({"task": "inspect again"}, origin_session_id="discord:2", allow_parallel=True)
+        await asyncio.sleep(0)
+
+        assert first["status"] == "accepted"
+        assert second["status"] == "accepted"
+        assert len(started) == 2
+        assert manager.get_status("")["job"]["id"] == second["job"]["id"]
+
+        release.set()
+        await asyncio.sleep(0)
+
+    asyncio.run(run())
+
+
 def test_codex_manager_maps_default_jobs_to_app_server_when_configured(tmp_path):
     async def run():
         manager = CodexJobManager(

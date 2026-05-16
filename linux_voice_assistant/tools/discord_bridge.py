@@ -249,6 +249,7 @@ class DiscordBotService:
         result = await self._codex_manager.start_task(
             {"task": task, "execution_mode": "docker"},
             origin_session_id=discord_origin_session_id(author_id),
+            allow_parallel=True,
         )
         return {"start_result": result}
 

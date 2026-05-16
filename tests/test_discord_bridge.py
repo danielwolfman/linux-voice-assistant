@@ -79,6 +79,7 @@ async def _test_discord_accepts_job_with_reaction_and_no_reply():
     assert message.reactions == ["\N{EYES}"]
     assert message.channel.messages == []
     assert manager.started_with == ("130283160301862913", "fix the tests")
+    assert manager.allow_parallel is True
 
 
 def test_discord_ignores_unallowed_user_without_reaction_or_reply():
@@ -219,9 +220,11 @@ class FakeCodexManager:
     def __init__(self, start_result):
         self.start_result = start_result
         self.started_with = None
+        self.allow_parallel = None
 
-    async def start_task(self, arguments, *, origin_session_id):
+    async def start_task(self, arguments, *, origin_session_id, allow_parallel=False):
         self.started_with = (discord_user_id_from_origin(origin_session_id), arguments["task"])
+        self.allow_parallel = allow_parallel
         return self.start_result
 
     def get_status(self, job_id=""):
