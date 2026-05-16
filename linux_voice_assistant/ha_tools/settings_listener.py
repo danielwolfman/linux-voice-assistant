@@ -106,6 +106,12 @@ class HomeAssistantSettingsListener:
         for key, entity_id in self._entity_ids_by_key.items():
             try:
                 state = await self._request_json("GET", f"/api/states/{entity_id}")
+            except aiohttp.ClientResponseError as err:
+                if err.status == 404:
+                    _LOGGER.debug("Skipping missing Home Assistant setting entity %s", entity_id)
+                    continue
+                _LOGGER.exception("Failed to load Home Assistant setting state for %s", entity_id)
+                continue
             except Exception:
                 _LOGGER.exception("Failed to load Home Assistant setting state for %s", entity_id)
                 continue
@@ -203,6 +209,8 @@ def _parse_entity_state(key: str, state: Any) -> Optional[Any]:
     if not isinstance(state, dict):
         return None
     raw_state = state.get("state")
+    if str(raw_state).lower() in {"unknown", "unavailable"}:
+        return None
     value_type = _REMOTE_KEYS[key]
     try:
         if value_type is bool:

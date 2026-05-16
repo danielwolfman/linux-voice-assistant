@@ -62,7 +62,7 @@ class HomeAssistantToolBridge:
                     "properties": {
                         "query": {"type": "string", "description": "Natural-language search phrase like office light, kitchen lamp, or bedroom AC."},
                         "area": {"type": "string", "description": "Optional exact Home Assistant area name like Kitchen or Living Room when you are confident."},
-                        "domain": {"type": "string", "description": "Entity domain like light, climate, switch, or sensor."},
+                        "domain": {"type": "string", "description": "Entity domain like light, climate, switch, sensor, or todo."},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
                     },
                     "additionalProperties": False,
@@ -433,6 +433,7 @@ def _suggested_services(domain: str) -> list[str]:
         "cover": ["open_cover", "close_cover", "stop_cover"],
         "vacuum": ["start", "stop", "return_to_base"],
         "lock": ["lock", "unlock"],
+        "todo": ["add_item", "update_item", "remove_item", "remove_completed_items", "get_items"],
     }
     return suggestions.get(domain, [])
 

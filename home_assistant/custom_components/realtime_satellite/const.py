@@ -29,7 +29,8 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "openai_voice": "marin",
     "openai_instructions": (
         "You are a Linux voice satellite for Home Assistant. "
-        "Keep spoken replies short and use Home Assistant tools for smart-home state and control."
+        "Keep spoken replies short and use Home Assistant tools for smart-home state and control. "
+        "When the user refers to 'רשימת קניות', 'shopping list', or groceries, treat it as the Google Keep shopping list entity todo.google_keep_shopping."
     ),
     "wakeup_sound": "sounds/wake_word_triggered.flac",
     "processing_sound": "sounds/processing.wav",

@@ -48,6 +48,13 @@ def test_entity_result_includes_suggested_services_for_actionable_domains():
     assert result["suggested_service_domain"] == "script"
     assert result["suggested_services"] == ["turn_on"]
     assert _suggested_services("light") == ["turn_on", "turn_off", "toggle"]
+    assert _suggested_services("todo") == [
+        "add_item",
+        "update_item",
+        "remove_item",
+        "remove_completed_items",
+        "get_items",
+    ]
 
 
 def test_matches_area_uses_generic_token_matching():
@@ -68,3 +75,8 @@ def test_extract_duckduckgo_results_parses_titles_urls_and_snippets():
 
 def test_settings_listener_parses_integer_number_states():
     assert _parse_entity_state("memory_interactions_count", {"state": "6.0"}) == 6
+
+
+def test_settings_listener_ignores_unavailable_setting_states():
+    assert _parse_entity_state("openai_instructions", {"state": "unavailable"}) is None
+    assert _parse_entity_state("openai_instructions", {"state": "unknown"}) is None
