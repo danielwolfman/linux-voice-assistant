@@ -190,7 +190,7 @@ class HomeAssistantToolBridge:
         payload = dict(target)
         payload.update(data)
         _LOGGER.debug("HA call_service domain=%s service=%s target=%s data=%s", domain, service, target, data)
-        result = await self._request("POST", f"/api/services/{domain}/{service}", json_payload=payload)
+        result = await self._request("POST", _service_request_path(domain, service), json_payload=payload)
         self._states_cache = None
         _LOGGER.debug("HA call_service raw_result_count=%s", len(result) if isinstance(result, list) else "n/a")
         return {
@@ -305,6 +305,13 @@ def _entity_name(entity_id: str, attributes: dict[str, Any]) -> str:
     return str(attributes.get("friendly_name") or attributes.get("name") or entity_id)
 
 
+def _service_request_path(domain: str, service: str) -> str:
+    path = f"/api/services/{domain}/{service}"
+    if (domain, service) in _RESPONSE_REQUIRED_SERVICES:
+        return f"{path}?return_response"
+    return path
+
+
 def _matches_query(entity: EntityRecord, query: str) -> bool:
     query_tokens = _query_match_tokens(query)
     entity_tokens = _entity_search_tokens(entity)
@@ -416,6 +423,10 @@ _STOP_TOKENS = {
     "on",
     "to",
     "for",
+}
+
+_RESPONSE_REQUIRED_SERVICES = {
+    ("todo", "get_items"),
 }
 
 

@@ -1,4 +1,11 @@
-from linux_voice_assistant.ha_tools.client import EntityRecord, _entity_match_score, _matches_area, _matches_query, _suggested_services
+from linux_voice_assistant.ha_tools.client import (
+    EntityRecord,
+    _entity_match_score,
+    _matches_area,
+    _matches_query,
+    _service_request_path,
+    _suggested_services,
+)
 from linux_voice_assistant.ha_tools.settings_listener import _parse_entity_state
 from linux_voice_assistant.tools.web_search import extract_duckduckgo_results
 
@@ -55,6 +62,11 @@ def test_entity_result_includes_suggested_services_for_actionable_domains():
         "remove_completed_items",
         "get_items",
     ]
+
+
+def test_todo_get_items_requests_home_assistant_service_response():
+    assert _service_request_path("todo", "get_items") == "/api/services/todo/get_items?return_response"
+    assert _service_request_path("todo", "add_item") == "/api/services/todo/add_item"
 
 
 def test_matches_area_uses_generic_token_matching():
