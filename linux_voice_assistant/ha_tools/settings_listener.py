@@ -207,6 +207,8 @@ def _parse_entity_state(key: str, state: Any) -> Optional[Any]:
     try:
         if value_type is bool:
             return str(raw_state).lower() == "on"
+        if value_type is int:
+            return int(float(str(raw_state)))
         return value_type(raw_state)
     except (TypeError, ValueError):
         _LOGGER.warning("Ignoring invalid Home Assistant setting state for %s: %r", key, raw_state)

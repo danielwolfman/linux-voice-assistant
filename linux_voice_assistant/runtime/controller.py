@@ -84,6 +84,7 @@ class SessionController:
         self._end_session_requested = False
         self._notification_response_active = False
         self._pending_user_transcript: Optional[str] = None
+        self._pending_tool_memory: list[str] = []
         self._response_delay_task: Optional[asyncio.Task[None]] = None
         self._wakeup_sound_task: Optional[asyncio.Task[None]] = None
         self._interaction_memory = InteractionMemoryStore(config.download_dir / "interaction_memory.json")
@@ -400,7 +401,10 @@ class SessionController:
 
     async def _on_tool_call_started(self, tool_name: str, arguments: dict[str, object]) -> None:
         _LOGGER.debug("Executing Home Assistant tool: %s", tool_name)
-        await self._activity_logger.record_activity("tool_call", f"Started {tool_name} input={_compact_log_value(arguments)}")
+        await self._activity_logger.record_activity("tool_call", f"Started {tool_name} input={_compact_log_value(arguments, limit=1000)}")
+        tool_memory = _format_tool_memory_start(tool_name, arguments)
+        if tool_memory:
+            self._pending_tool_memory.append(tool_memory)
         self._tool_call_depth += 1
         self._tool_called_in_response_chain = True
         self._start_tool_sound()
@@ -408,7 +412,10 @@ class SessionController:
 
     async def _on_tool_call_finished(self, tool_name: str, result: dict[str, object]) -> None:
         _LOGGER.debug("Finished Home Assistant tool: %s", tool_name)
-        await self._activity_logger.record_activity("tool_call", f"Finished {tool_name} output={_compact_log_value(result)}")
+        await self._activity_logger.record_activity("tool_call", f"Finished {tool_name} output={_compact_log_value(result, limit=1000)}")
+        tool_memory = _format_tool_memory_result(tool_name, result)
+        if tool_memory:
+            self._pending_tool_memory.append(tool_memory)
         self._tool_call_depth = max(0, self._tool_call_depth - 1)
 
     async def _on_end_session_requested(self, reason: str) -> None:
@@ -441,6 +448,7 @@ class SessionController:
 
     async def _on_user_transcript(self, transcript: str) -> None:
         self._pending_user_transcript = transcript
+        self._pending_tool_memory = []
         await self._activity_logger.record_activity("user", transcript)
 
     async def _on_assistant_transcript(self, transcript: str) -> None:
@@ -605,10 +613,14 @@ class SessionController:
     def _remember_completed_interaction(self, assistant_transcript: str) -> None:
         if self._notification_response_active:
             return
-        if not self._pending_user_transcript or not assistant_transcript.strip():
+        if not self._pending_user_transcript:
             return
-        self._interaction_memory.append(user=self._pending_user_transcript, assistant=assistant_transcript)
+        assistant_memory = _format_assistant_memory(assistant_transcript, self._pending_tool_memory)
+        if not assistant_memory:
+            return
+        self._interaction_memory.append(user=self._pending_user_transcript, assistant=assistant_memory)
         self._pending_user_transcript = None
+        self._pending_tool_memory = []
 
     def _current_user_language(self) -> str:
         return _detect_language(self._pending_user_transcript) if self._pending_user_transcript else ""
@@ -779,6 +791,41 @@ def _enabled_tools_from_config(config: AppConfig) -> dict[str, bool]:
 def _compact_log_value(value: object, limit: int = 100) -> str:
     text = str(value).replace("\n", " ").strip()
     return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _format_assistant_memory(assistant_transcript: str, tool_memory: list[str]) -> str:
+    parts = []
+    transcript = assistant_transcript.strip()
+    if transcript:
+        parts.append(transcript)
+    compact_tool_memory = [_compact_log_value(item, limit=1200) for item in tool_memory if item.strip()]
+    if compact_tool_memory:
+        parts.append("Action context from this turn:\n" + "\n".join(f"- {item}" for item in compact_tool_memory))
+    return "\n\n".join(parts).strip()
+
+
+def _format_tool_memory_start(tool_name: str, arguments: dict[str, object]) -> str:
+    if tool_name == "send_discord_message":
+        message = str(arguments.get("message") or "").strip()
+        if not message:
+            return ""
+        recipients = arguments.get("user_ids")
+        recipient_text = f" to Discord user ids {recipients}" if recipients else " to the configured Discord allowlist"
+        return f"Requested Discord message{recipient_text}: {message}"
+    if tool_name == "start_timer":
+        return f"Started timer request: {_compact_log_value(arguments, limit=500)}"
+    if tool_name == "start_codex_task":
+        task = str(arguments.get("task") or "").strip()
+        return f"Started Codex task: {task}" if task else ""
+    return ""
+
+
+def _format_tool_memory_result(tool_name: str, result: dict[str, object]) -> str:
+    if tool_name == "send_discord_message":
+        return f"Discord send result: {_compact_log_value(result, limit=500)}"
+    if tool_name in {"web_search", "get_state", "call_service", "start_timer", "cancel_timer", "start_codex_task"}:
+        return f"{tool_name} result: {_compact_log_value(result, limit=500)}"
+    return ""
 
 
 def _resolve_pricing_model(model: str) -> str:

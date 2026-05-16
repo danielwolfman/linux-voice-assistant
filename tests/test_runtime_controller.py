@@ -294,6 +294,7 @@ def test_completed_response_persists_user_assistant_interaction(tmp_path):
     controller = object.__new__(SessionController)
     controller._notification_response_active = False
     controller._pending_user_transcript = "Turn on the kitchen lights"
+    controller._pending_tool_memory = []
     controller._interaction_memory = InteractionMemoryStore(tmp_path / "interaction_memory.json")
 
     controller._remember_completed_interaction("Done.")
@@ -303,6 +304,23 @@ def test_completed_response_persists_user_assistant_interaction(tmp_path):
     assert recent[0].user == "Turn on the kitchen lights"
     assert recent[0].assistant == "Done."
     assert controller._pending_user_transcript is None
+
+
+def test_completed_response_persists_tool_context_with_interaction(tmp_path):
+    controller = object.__new__(SessionController)
+    controller._notification_response_active = False
+    controller._pending_user_transcript = "Send that link again"
+    controller._pending_tool_memory = ["Requested Discord message to the configured Discord allowlist: https://example.com/show"]
+    controller._interaction_memory = InteractionMemoryStore(tmp_path / "interaction_memory.json")
+
+    controller._remember_completed_interaction("Sent.")
+
+    recent = controller._interaction_memory.load_recent(1)
+    assert len(recent) == 1
+    assert "Sent." in recent[0].assistant
+    assert "Action context from this turn:" in recent[0].assistant
+    assert "https://example.com/show" in recent[0].assistant
+    assert controller._pending_tool_memory == []
 
 
 def test_refresh_realtime_memory_context_uses_configured_count(tmp_path):

@@ -1,4 +1,5 @@
 from linux_voice_assistant.ha_tools.client import EntityRecord, _entity_match_score, _matches_area, _matches_query, _suggested_services
+from linux_voice_assistant.ha_tools.settings_listener import _parse_entity_state
 from linux_voice_assistant.tools.web_search import extract_duckduckgo_results
 
 
@@ -63,3 +64,7 @@ def test_extract_duckduckgo_results_parses_titles_urls_and_snippets():
     results = extract_duckduckgo_results(page, max_results=5)
 
     assert results == [{"title": "Example Result", "url": "https://example.com/news", "snippet": "Example snippet text"}]
+
+
+def test_settings_listener_parses_integer_number_states():
+    assert _parse_entity_state("memory_interactions_count", {"state": "6.0"}) == 6
