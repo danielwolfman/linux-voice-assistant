@@ -20,6 +20,7 @@ from .protocol import ProtocolError, build_control, negotiate_audio_format, pars
 
 _LOGGER = logging.getLogger(__name__)
 _REMOTE_PLAYBACK_MAX_AHEAD_SECONDS = 0.75
+_WAKE_GRACE_AFTER_CONNECT_SECONDS = 3.0
 
 SendJson = Callable[[dict], Coroutine[Any, Any, None]]
 SendBinary = Callable[[bytes], Coroutine[Any, Any, None]]
@@ -228,10 +229,19 @@ class RemotePlaybackSink:
 
 
 class SatelliteSessionHandler:
-    def __init__(self, controller, *, session_id: str = "", on_activity: Optional[SessionActivityCallback] = None) -> None:
+    def __init__(
+        self,
+        controller,
+        *,
+        session_id: str = "",
+        on_activity: Optional[SessionActivityCallback] = None,
+        wake_grace_seconds: float = _WAKE_GRACE_AFTER_CONNECT_SECONDS,
+    ) -> None:
         self._controller = controller
         self.session_id = session_id
         self._on_activity = on_activity
+        self._created_at = time.monotonic()
+        self._wake_grace_seconds = wake_grace_seconds
 
     @property
     def controller(self):
@@ -242,6 +252,10 @@ class SatelliteSessionHandler:
         if message.type == "wake_detected":
             self._mark_activity()
             wake_word = str(message.payload.get("wake_word") or "wake")
+            source = str(message.payload.get("source") or message.payload.get("trigger") or "wake_word")
+            if self._should_ignore_startup_wake(source):
+                _LOGGER.info("Ignoring VAPE wake detected during reconnect grace period: %s source=%s", wake_word, source)
+                return
             _LOGGER.info("VAPE wake detected: %s", wake_word)
             self._controller.wakeup(RemoteWakeWord(id=wake_word, wake_word=wake_word))
             await send_json(build_control("start_capture"))
@@ -270,6 +284,13 @@ class SatelliteSessionHandler:
     def _mark_activity(self) -> None:
         if self._on_activity is not None and self.session_id:
             self._on_activity(self.session_id)
+
+    def _should_ignore_startup_wake(self, source: str) -> bool:
+        if self._wake_grace_seconds <= 0:
+            return False
+        if source.lower() in {"button", "hotkey", "manual", "click"}:
+            return False
+        return (time.monotonic() - self._created_at) < self._wake_grace_seconds
 
 
 SessionFactory = Callable[[PcmFormat, SendJson, SendBinary, str], SatelliteSessionHandler]

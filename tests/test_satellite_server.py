@@ -31,7 +31,7 @@ def test_satellite_server_handshake_and_audio_routes_to_controller():
 
 async def _test_satellite_server_handshake_and_audio_routes_to_controller():
     controller = FakeController()
-    app = create_app(lambda _format, _send_json, _send_binary, _session_id: SatelliteSessionHandler(controller))
+    app = create_app(lambda _format, _send_json, _send_binary, _session_id: SatelliteSessionHandler(controller, wake_grace_seconds=0))
     client = TestClient(TestServer(app))
     await client.start_server()
 
@@ -56,6 +56,69 @@ async def _test_satellite_server_handshake_and_audio_routes_to_controller():
         assert start_capture["type"] == "start_capture"
         assert controller.wake_words[0].wake_word == "okay_nabu"
         assert controller.audio_chunks == [b"\x01\x00\x02\x00"]
+
+        await ws.close()
+    finally:
+        await client.close()
+
+
+def test_satellite_server_ignores_startup_wake_word_after_reconnect():
+    asyncio.run(_test_satellite_server_ignores_startup_wake_word_after_reconnect())
+
+
+async def _test_satellite_server_ignores_startup_wake_word_after_reconnect():
+    controller = FakeController()
+    app = create_app(lambda _format, _send_json, _send_binary, _session_id: SatelliteSessionHandler(controller, wake_grace_seconds=10))
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        ws = await client.ws_connect("/vape")
+        await ws.send_json(
+            {
+                "type": "hello",
+                "device_id": "voice-pe-test",
+                "formats": [{"codec": "pcm_s16le", "sample_rate": 24000, "channels": 1}],
+            }
+        )
+        await ws.receive_json()
+
+        await ws.send_json({"type": "wake_detected", "wake_word": "okay_nabu"})
+        await asyncio.sleep(0.05)
+
+        assert controller.wake_words == []
+
+        await ws.close()
+    finally:
+        await client.close()
+
+
+def test_satellite_server_allows_manual_wake_during_startup_grace():
+    asyncio.run(_test_satellite_server_allows_manual_wake_during_startup_grace())
+
+
+async def _test_satellite_server_allows_manual_wake_during_startup_grace():
+    controller = FakeController()
+    app = create_app(lambda _format, _send_json, _send_binary, _session_id: SatelliteSessionHandler(controller, wake_grace_seconds=10))
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        ws = await client.ws_connect("/vape")
+        await ws.send_json(
+            {
+                "type": "hello",
+                "device_id": "voice-pe-test",
+                "formats": [{"codec": "pcm_s16le", "sample_rate": 24000, "channels": 1}],
+            }
+        )
+        await ws.receive_json()
+
+        await ws.send_json({"type": "wake_detected", "wake_word": "okay_nabu", "source": "button"})
+        start_capture = await ws.receive_json()
+
+        assert start_capture["type"] == "start_capture"
+        assert controller.wake_words[0].wake_word == "okay_nabu"
 
         await ws.close()
     finally:

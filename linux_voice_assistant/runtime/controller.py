@@ -531,6 +531,8 @@ class SessionController:
     def _should_end_session_after_response(self, transcript: str) -> bool:
         if self._notification_response_active:
             return True
+        if not self._pending_user_transcript and not self._tool_called_in_response_chain:
+            return True
         if _looks_like_question(transcript):
             return False
         if self._end_session_requested:
