@@ -84,6 +84,10 @@ class CodexJobManager:
         dispatch_mode: str = "exec",
         app_server_command: str = "codex",
         app_server_url: str = "",
+        app_server_client_name: str = "codex_chatgpt_android_remote",
+        app_server_client_version: str = "dev",
+        app_server_thread_source: str = "",
+        app_server_service_name: str = "",
         completion_callback: Optional[CodexCompletionCallback] = None,
         max_final_output_chars: int = 4000,
     ) -> None:
@@ -96,6 +100,10 @@ class CodexJobManager:
         self._dispatch_mode = dispatch_mode.strip().lower()
         self._app_server_command = app_server_command
         self._app_server_url = app_server_url.strip()
+        self._app_server_client_name = app_server_client_name.strip() or "codex_chatgpt_android_remote"
+        self._app_server_client_version = app_server_client_version.strip() or "dev"
+        self._app_server_thread_source = app_server_thread_source.strip()
+        self._app_server_service_name = app_server_service_name.strip()
         self._completion_callback = completion_callback
         self._max_final_output_chars = max_final_output_chars
         self._jobs: dict[str, CodexJob] = {}
@@ -387,17 +395,26 @@ class CodexJobManager:
 
             initialize_id = await send_request(
                 "initialize",
-                {"clientInfo": {"name": "linux-voice-assistant", "version": "0"}, "capabilities": {}},
+                {
+                    "clientInfo": {
+                        "name": self._app_server_client_name,
+                        "version": self._app_server_client_version,
+                    },
+                    "capabilities": {},
+                },
             )
+            thread_start_params: dict[str, Any] = {
+                "cwd": os.fspath(job.workspace),
+                "approvalPolicy": "never",
+                "sandbox": "workspace-write",
+            }
+            if self._app_server_thread_source:
+                thread_start_params["threadSource"] = self._app_server_thread_source
+            if self._app_server_service_name:
+                thread_start_params["serviceName"] = self._app_server_service_name
             thread_start_id = await send_request(
                 "thread/start",
-                {
-                    "cwd": os.fspath(job.workspace),
-                    "approvalPolicy": "never",
-                    "sandbox": "workspace-write",
-                    "threadSource": "user",
-                    "serviceName": "linux-voice-assistant",
-                },
+                thread_start_params,
             )
             turn_start_id = 0
 

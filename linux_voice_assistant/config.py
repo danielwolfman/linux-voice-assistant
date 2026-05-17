@@ -79,6 +79,10 @@ class AppConfig:
     codex_dispatch_mode: str
     codex_app_server_command: str
     codex_app_server_url: str
+    codex_app_server_client_name: str
+    codex_app_server_client_version: str
+    codex_app_server_thread_source: str
+    codex_app_server_service_name: str
     discord_enabled: bool
     discord_bot_token: str
     discord_client_id: str
@@ -140,6 +144,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-dispatch-mode", choices=["exec", "app_server"], help="Codex dispatch backend: direct codex exec or Codex app-server")
     parser.add_argument("--codex-app-server-command", help="Codex executable used for app-server dispatch")
     parser.add_argument("--codex-app-server-url", help="Existing Codex app-server WebSocket URL used for app-server dispatch")
+    parser.add_argument("--codex-app-server-client-name", help="Client name sent when dispatching Codex app-server tasks")
+    parser.add_argument("--codex-app-server-client-version", help="Client version sent when dispatching Codex app-server tasks")
+    parser.add_argument("--codex-app-server-thread-source", help="Optional threadSource sent when starting Codex app-server threads")
+    parser.add_argument("--codex-app-server-service-name", help="Optional serviceName sent when starting Codex app-server threads")
     parser.add_argument("--discord-enabled", action="store_true", help="Enable the Discord bot bridge")
     parser.add_argument("--disable-discord", action="store_true", help="Disable the Discord bot bridge")
     parser.add_argument("--discord-bot-token", help="Discord bot token")
@@ -361,6 +369,40 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
             )
         ),
         codex_app_server_url=str(_pick(args.codex_app_server_url, os.getenv("LVA_CODEX_APP_SERVER_URL"), _get_str(yaml_config, "codex.app_server_url")) or ""),
+        codex_app_server_client_name=str(
+            _pick(
+                args.codex_app_server_client_name,
+                os.getenv("LVA_CODEX_APP_SERVER_CLIENT_NAME"),
+                _get_str(yaml_config, "codex.app_server_client_name"),
+                "codex_chatgpt_android_remote",
+            )
+        ),
+        codex_app_server_client_version=str(
+            _pick(
+                args.codex_app_server_client_version,
+                os.getenv("LVA_CODEX_APP_SERVER_CLIENT_VERSION"),
+                _get_str(yaml_config, "codex.app_server_client_version"),
+                "dev",
+            )
+        ),
+        codex_app_server_thread_source=str(
+            _pick(
+                args.codex_app_server_thread_source,
+                os.getenv("LVA_CODEX_APP_SERVER_THREAD_SOURCE"),
+                _get_str(yaml_config, "codex.app_server_thread_source"),
+                "",
+            )
+            or ""
+        ),
+        codex_app_server_service_name=str(
+            _pick(
+                args.codex_app_server_service_name,
+                os.getenv("LVA_CODEX_APP_SERVER_SERVICE_NAME"),
+                _get_str(yaml_config, "codex.app_server_service_name"),
+                "",
+            )
+            or ""
+        ),
         discord_enabled=bool(_pick(discord_enabled, _env_bool("LVA_DISCORD_ENABLED"), _get_bool(yaml_config, "discord.enabled"), True)),
         discord_bot_token=str(_pick(args.discord_bot_token, _get_str(yaml_config, "discord.bot_token"), os.getenv("LVA_DISCORD_BOT_TOKEN"), os.getenv("DISCORD_BOT_TOKEN"), "")),
         discord_client_id=str(_pick(args.discord_client_id, os.getenv("LVA_DISCORD_CLIENT_ID"), _get_str(yaml_config, "discord.client_id"), "")),

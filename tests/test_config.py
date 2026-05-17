@@ -109,6 +109,8 @@ codex:
   dispatch_mode: app_server
   app_server_command: /opt/codex/bin/codex
   app_server_url: ws://127.0.0.1:17777
+  app_server_client_name: codex_chatgpt_android_remote
+  app_server_client_version: dev
 """,
         encoding="utf-8",
     )
@@ -129,6 +131,10 @@ codex:
     assert config.codex_dispatch_mode == "app_server"
     assert config.codex_app_server_command == "/opt/codex/bin/codex"
     assert config.codex_app_server_url == "ws://127.0.0.1:17777"
+    assert config.codex_app_server_client_name == "codex_chatgpt_android_remote"
+    assert config.codex_app_server_client_version == "dev"
+    assert config.codex_app_server_thread_source == ""
+    assert config.codex_app_server_service_name == ""
 
 
 def test_load_config_reads_memory_interactions_count(tmp_path, monkeypatch):

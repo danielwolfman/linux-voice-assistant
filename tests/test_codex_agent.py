@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 
 from aiohttp import web
 
@@ -134,7 +135,7 @@ def test_codex_manager_can_run_app_server_job_over_websocket(tmp_path):
             await ws.prepare(request)
             async for message in ws:
                 payload = json.loads(message.data)
-                requests.append(payload["method"])
+                requests.append(payload)
                 if payload["method"] == "initialize":
                     await ws.send_str(json.dumps({"id": payload["id"], "result": {"userAgent": "test", "codexHome": "/tmp"}}))
                 elif payload["method"] == "thread/start":
@@ -173,7 +174,9 @@ def test_codex_manager_can_run_app_server_job_over_websocket(tmp_path):
 
             await manager._run_job(job)
 
-            assert requests == ["initialize", "thread/start", "turn/start"]
+            assert [request["method"] for request in requests] == ["initialize", "thread/start", "turn/start"]
+            assert requests[0]["params"]["clientInfo"] == {"name": "codex_chatgpt_android_remote", "version": "dev"}
+            assert requests[1]["params"] == {"cwd": os.fspath(tmp_path), "approvalPolicy": "never", "sandbox": "workspace-write"}
             assert job.status == "succeeded"
             assert job.final_output == "done"
             assert job.app_server_thread_id == "thread-1"
