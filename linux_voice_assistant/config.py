@@ -78,6 +78,7 @@ class AppConfig:
     codex_host_command: str
     codex_dispatch_mode: str
     codex_app_server_command: str
+    codex_app_server_url: str
     discord_enabled: bool
     discord_bot_token: str
     discord_client_id: str
@@ -138,6 +139,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-host-command", help="Codex executable used for explicitly confirmed host-mode tasks")
     parser.add_argument("--codex-dispatch-mode", choices=["exec", "app_server"], help="Codex dispatch backend: direct codex exec or Codex app-server")
     parser.add_argument("--codex-app-server-command", help="Codex executable used for app-server dispatch")
+    parser.add_argument("--codex-app-server-url", help="Existing Codex app-server WebSocket URL used for app-server dispatch")
     parser.add_argument("--discord-enabled", action="store_true", help="Enable the Discord bot bridge")
     parser.add_argument("--disable-discord", action="store_true", help="Disable the Discord bot bridge")
     parser.add_argument("--discord-bot-token", help="Discord bot token")
@@ -358,6 +360,7 @@ def load_config(argv: Optional[Sequence[str]] = None) -> tuple[AppConfig, argpar
                 "codex",
             )
         ),
+        codex_app_server_url=str(_pick(args.codex_app_server_url, os.getenv("LVA_CODEX_APP_SERVER_URL"), _get_str(yaml_config, "codex.app_server_url")) or ""),
         discord_enabled=bool(_pick(discord_enabled, _env_bool("LVA_DISCORD_ENABLED"), _get_bool(yaml_config, "discord.enabled"), True)),
         discord_bot_token=str(_pick(args.discord_bot_token, _get_str(yaml_config, "discord.bot_token"), os.getenv("LVA_DISCORD_BOT_TOKEN"), os.getenv("DISCORD_BOT_TOKEN"), "")),
         discord_client_id=str(_pick(args.discord_client_id, os.getenv("LVA_DISCORD_CLIENT_ID"), _get_str(yaml_config, "discord.client_id"), "")),

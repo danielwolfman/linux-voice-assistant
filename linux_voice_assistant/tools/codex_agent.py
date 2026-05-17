@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
+import aiohttp
+
 _LOGGER = logging.getLogger(__name__)
 
 CodexCompletionCallback = Callable[["CodexJob"], Awaitable[None]]
@@ -44,6 +46,7 @@ class CodexJob:
     app_server_thread_id: str = ""
     app_server_turn_id: str = ""
     _process: Optional[asyncio.subprocess.Process] = field(default=None, repr=False, compare=False)
+    _ws: Any = field(default=None, repr=False, compare=False)
 
     @property
     def is_active(self) -> bool:
@@ -80,6 +83,7 @@ class CodexJobManager:
         host_command: str = "codex",
         dispatch_mode: str = "exec",
         app_server_command: str = "codex",
+        app_server_url: str = "",
         completion_callback: Optional[CodexCompletionCallback] = None,
         max_final_output_chars: int = 4000,
     ) -> None:
@@ -91,6 +95,7 @@ class CodexJobManager:
         self._host_command = host_command
         self._dispatch_mode = dispatch_mode.strip().lower()
         self._app_server_command = app_server_command
+        self._app_server_url = app_server_url.strip()
         self._completion_callback = completion_callback
         self._max_final_output_chars = max_final_output_chars
         self._jobs: dict[str, CodexJob] = {}
@@ -101,6 +106,9 @@ class CodexJobManager:
 
     async def close(self) -> None:
         for active_job in self._active_jobs():
+            if active_job._ws is not None and not active_job._ws.closed:
+                active_job.status = "cancelling"
+                await active_job._ws.close()
             if active_job._process and active_job._process.returncode is None:
                 active_job.status = "cancelling"
                 active_job._process.terminate()
@@ -322,30 +330,59 @@ class CodexJobManager:
 
     async def _run_app_server_job(self, job: CodexJob) -> None:
         command = [self._app_server_command, "app-server", "--listen", "stdio://"]
+        if self._app_server_url:
+            command = ["app-server-websocket", self._app_server_url]
         (job.job_dir / "command.txt").write_text(" ".join(shlex.quote(part) for part in command), encoding="utf-8")
         request_id = 0
         final_output = ""
+        session: aiohttp.ClientSession | None = None
+        stderr_task: asyncio.Task[None] | None = None
 
         try:
-            process_env = _codex_process_env()
-            job._process = await asyncio.create_subprocess_exec(
-                *command,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=process_env,
-            )
-            assert job._process.stdin is not None
-            assert job._process.stdout is not None
+            if self._app_server_url:
+                session = aiohttp.ClientSession()
+                job._ws = await session.ws_connect(self._app_server_url)
 
-            stderr_task = asyncio.create_task(self._capture_stderr(job))
+                async def send_transport_line(payload: str) -> None:
+                    await job._ws.send_str(payload)
+
+                async def read_transport_line() -> bytes:
+                    message = await job._ws.receive()
+                    if message.type == aiohttp.WSMsgType.TEXT:
+                        return (message.data + "\n").encode("utf-8")
+                    if message.type == aiohttp.WSMsgType.ERROR:
+                        raise RuntimeError(str(job._ws.exception()))
+                    return b""
+
+            else:
+                process_env = _codex_process_env()
+                job._process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=process_env,
+                )
+                assert job._process.stdin is not None
+                assert job._process.stdout is not None
+                stderr_task = asyncio.create_task(self._capture_stderr(job))
+
+                async def send_transport_line(payload: str) -> None:
+                    assert job._process is not None
+                    assert job._process.stdin is not None
+                    job._process.stdin.write(payload.encode("utf-8"))
+                    await job._process.stdin.drain()
+
+                async def read_transport_line() -> bytes:
+                    assert job._process is not None
+                    assert job._process.stdout is not None
+                    return await job._process.stdout.readline()
 
             async def send_request(method: str, params: dict[str, Any]) -> int:
                 nonlocal request_id
                 request_id += 1
                 payload = {"id": request_id, "method": method, "params": params}
-                job._process.stdin.write((json.dumps(payload) + "\n").encode("utf-8"))
-                await job._process.stdin.drain()
+                await send_transport_line(json.dumps(payload) + "\n")
                 return request_id
 
             initialize_id = await send_request(
@@ -366,14 +403,17 @@ class CodexJobManager:
 
             with job.events_path.open("ab") as events_file:
                 while True:
-                    line = await job._process.stdout.readline()
+                    line = await read_transport_line()
                     if not line:
                         if job.status == "cancelling":
                             job.status = "cancelled"
                             job.return_code = -15
                         else:
                             job.status = "failed"
-                            job.return_code = await job._process.wait()
+                            if job._process is not None:
+                                job.return_code = await job._process.wait()
+                            else:
+                                job.return_code = 1
                             job.error = f"Codex app-server exited before the turn completed with code {job.return_code}"
                         break
 
@@ -473,15 +513,20 @@ class CodexJobManager:
 
             if job.final_output:
                 job.final_output_path.write_text(job.final_output, encoding="utf-8")
-            if job._process.returncode is None:
+            if job._ws is not None and not job._ws.closed:
+                await job._ws.close()
+            if job._process is not None and job._process.returncode is None:
                 job._process.terminate()
                 try:
                     await asyncio.wait_for(job._process.wait(), timeout=5)
                 except asyncio.TimeoutError:
                     job._process.kill()
                     await job._process.wait()
-            with contextlib.suppress(asyncio.CancelledError):
-                await stderr_task
+            if stderr_task is not None:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await stderr_task
+            if session is not None:
+                await session.close()
         except FileNotFoundError as err:
             job.status = "failed"
             job.error = f"Failed to start Codex app-server command: {err}"
@@ -493,6 +538,9 @@ class CodexJobManager:
         finally:
             job.finished_at = time.time()
             job._process = None
+            job._ws = None
+            if session is not None and not session.closed:
+                await session.close()
             if self._active_job_id == job.id:
                 self._refresh_active_job_id()
             if not job.final_output:
@@ -504,11 +552,16 @@ class CodexJobManager:
                     _LOGGER.exception("Codex completion callback failed for job %s", job.id)
 
     async def _interrupt_app_server_job(self, job: CodexJob) -> None:
-        if job._process is None or job._process.stdin is None or not job.app_server_thread_id:
+        if not job.app_server_thread_id:
             return
         payload: dict[str, Any] = {"threadId": job.app_server_thread_id}
         if job.app_server_turn_id:
             payload["turnId"] = job.app_server_turn_id
+        if job._ws is not None and not job._ws.closed:
+            await job._ws.send_str(json.dumps({"id": int(time.time() * 1000), "method": "turn/interrupt", "params": payload}) + "\n")
+            return
+        if job._process is None or job._process.stdin is None:
+            return
         try:
             job._process.stdin.write(
                 (json.dumps({"id": int(time.time() * 1000), "method": "turn/interrupt", "params": payload}) + "\n").encode("utf-8")

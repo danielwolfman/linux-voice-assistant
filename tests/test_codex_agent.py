@@ -1,4 +1,7 @@
 import asyncio
+import json
+
+from aiohttp import web
 
 from linux_voice_assistant.tools import codex_agent
 from linux_voice_assistant.tools.codex_agent import CodexAgentTool, CodexJobManager, summarize_app_server_event, summarize_codex_event
@@ -118,6 +121,65 @@ def test_codex_manager_maps_default_jobs_to_app_server_when_configured(tmp_path)
         assert result["status"] == "accepted"
         assert result["job"]["execution_mode"] == "app_server"
         assert started[0].execution_mode == "app_server"
+
+    asyncio.run(run())
+
+
+def test_codex_manager_can_run_app_server_job_over_websocket(tmp_path):
+    async def run():
+        requests = []
+
+        async def websocket_handler(request):
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
+            async for message in ws:
+                payload = json.loads(message.data)
+                requests.append(payload["method"])
+                if payload["method"] == "initialize":
+                    await ws.send_str(json.dumps({"id": payload["id"], "result": {"userAgent": "test", "codexHome": "/tmp"}}))
+                elif payload["method"] == "thread/start":
+                    await ws.send_str(json.dumps({"id": payload["id"], "result": {"thread": {"id": "thread-1"}}}))
+                elif payload["method"] == "turn/start":
+                    await ws.send_str(json.dumps({"id": payload["id"], "result": {"turn": {"id": "turn-1"}}}))
+                    await ws.send_str(json.dumps({"method": "item/agentMessage/delta", "params": {"delta": "done"}}))
+                    await ws.send_str(json.dumps({"method": "turn/completed", "params": {"turn": {"status": "completed"}}}))
+            return ws
+
+        app = web.Application()
+        app.router.add_get("/", websocket_handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        assert site._server is not None
+        port = site._server.sockets[0].getsockname()[1]
+
+        try:
+            manager = CodexJobManager(
+                jobs_dir=tmp_path / "jobs",
+                default_workspace=tmp_path,
+                docker_image="lva-codex-agent:latest",
+                host_codex_home=tmp_path / ".codex",
+                dispatch_mode="app_server",
+                app_server_url=f"ws://127.0.0.1:{port}",
+            )
+            job = manager._create_job(
+                task="inspect the repo",
+                workspace=tmp_path,
+                execution_mode="app_server",
+                origin_session_id="session-1",
+                origin_language="en",
+            )
+
+            await manager._run_job(job)
+
+            assert requests == ["initialize", "thread/start", "turn/start"]
+            assert job.status == "succeeded"
+            assert job.final_output == "done"
+            assert job.app_server_thread_id == "thread-1"
+            assert (job.job_dir / "command.txt").read_text(encoding="utf-8").startswith("app-server-websocket ws://127.0.0.1:")
+        finally:
+            await runner.cleanup()
 
     asyncio.run(run())
 

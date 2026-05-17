@@ -48,6 +48,7 @@ runtime:
     assert config.codex_docker_image == "lva-codex-agent:latest"
     assert config.codex_dispatch_mode == "exec"
     assert config.codex_app_server_command == "codex"
+    assert config.codex_app_server_url == ""
     assert config.discord_enabled is True
     assert config.discord_allowed_user_ids == "130283160301862913,468850569986179084"
 
@@ -107,6 +108,7 @@ codex:
   host_command: /home/daniel/.local/bin/codex
   dispatch_mode: app_server
   app_server_command: /opt/codex/bin/codex
+  app_server_url: ws://127.0.0.1:17777
 """,
         encoding="utf-8",
     )
@@ -126,6 +128,7 @@ codex:
     assert config.codex_host_command == "/home/daniel/.local/bin/codex"
     assert config.codex_dispatch_mode == "app_server"
     assert config.codex_app_server_command == "/opt/codex/bin/codex"
+    assert config.codex_app_server_url == "ws://127.0.0.1:17777"
 
 
 def test_load_config_reads_memory_interactions_count(tmp_path, monkeypatch):
