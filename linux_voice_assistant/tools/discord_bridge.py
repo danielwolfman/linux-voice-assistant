@@ -13,6 +13,7 @@ from .codex_agent import CodexJob, CodexJobManager
 _LOGGER = logging.getLogger(__name__)
 
 DISCORD_ORIGIN_PREFIX = "discord:"
+DISCORD_CHANNEL_ORIGIN_PREFIX = "discord-channel:"
 _DISCORD_ID_RE = re.compile(r"\d{15,25}")
 _STILL_WORKING_SECONDS = 300
 _MAX_REPLY_CONTEXT_MESSAGES = 12
@@ -62,6 +63,16 @@ def discord_user_id_from_origin(origin_session_id: Optional[str]) -> str:
     if not origin_session_id or not origin_session_id.startswith(DISCORD_ORIGIN_PREFIX):
         return ""
     return origin_session_id[len(DISCORD_ORIGIN_PREFIX) :].strip()
+
+
+def discord_channel_origin_session_id(channel_id: str) -> str:
+    return f"{DISCORD_CHANNEL_ORIGIN_PREFIX}{channel_id}"
+
+
+def discord_channel_id_from_origin(origin_session_id: Optional[str]) -> str:
+    if not origin_session_id or not origin_session_id.startswith(DISCORD_CHANNEL_ORIGIN_PREFIX):
+        return ""
+    return origin_session_id[len(DISCORD_CHANNEL_ORIGIN_PREFIX) :].strip()
 
 
 class DiscordBotService:
@@ -173,14 +184,35 @@ class DiscordBotService:
             "results": [result.as_dict() for result in results],
         }
 
+    async def send_channel_message(self, channel_id: str, message: str) -> dict[str, Any]:
+        channel_id = str(channel_id or "").strip()
+        if not channel_id:
+            return {"status": "error", "error": "A Discord channel id is required."}
+        if not self._client or not self._ready.is_set():
+            return {"status": "error", "error": "Discord bot is not connected."}
+        try:
+            channel = self._client.get_channel(int(channel_id))
+            if channel is None:
+                channel = await self._client.fetch_channel(int(channel_id))
+            await channel.send(_truncate_discord_message(message))
+            return {"status": "sent", "channel_id": channel_id}
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.exception("Failed to send Discord channel message to %s", channel_id)
+            return {"status": "error", "channel_id": channel_id, "error": str(err)}
+
     async def notify_codex_job_finished(self, job: CodexJob) -> None:
+        channel_id = discord_channel_id_from_origin(job.origin_session_id)
+        if channel_id:
+            message = _codex_completion_message(job)
+            result = await self.send_channel_message(channel_id, message)
+            if result.get("status") != "sent":
+                _LOGGER.warning("Failed to send Discord channel Codex completion for job %s: %s", job.id, result)
+            return
+
         user_id = discord_user_id_from_origin(job.origin_session_id)
         if not user_id:
             return
-        if job.status == "succeeded":
-            message = job.final_output.strip() or "Codex finished without a final message."
-        else:
-            message = job.error or job.final_output or job.last_event or "No details were reported."
+        message = _codex_completion_message(job)
 
         context = self._job_contexts.pop(job.id, None)
         if context is not None:
@@ -504,3 +536,9 @@ def _truncate_discord_message(message: str, *, limit: int = 1900) -> str:
     if len(stripped) <= limit:
         return stripped
     return stripped[: limit - 30].rstrip() + "\n[message truncated]"
+
+
+def _codex_completion_message(job: CodexJob) -> str:
+    if job.status == "succeeded":
+        return job.final_output.strip() or "Codex finished without a final message."
+    return job.error or job.final_output or job.last_event or "No details were reported."

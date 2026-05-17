@@ -4,7 +4,15 @@ from types import SimpleNamespace
 
 from linux_voice_assistant.tools import discord_bridge
 from linux_voice_assistant.tools.codex_agent import CodexJob
-from linux_voice_assistant.tools.discord_bridge import DiscordBotService, DiscordTool, discord_origin_session_id, discord_user_id_from_origin, parse_discord_user_ids
+from linux_voice_assistant.tools.discord_bridge import (
+    DiscordBotService,
+    DiscordTool,
+    discord_channel_id_from_origin,
+    discord_channel_origin_session_id,
+    discord_origin_session_id,
+    discord_user_id_from_origin,
+    parse_discord_user_ids,
+)
 
 
 def test_parse_discord_user_ids_accepts_lists_and_text():
@@ -23,6 +31,11 @@ def test_discord_origin_session_id_round_trips():
     assert origin == "discord:130283160301862913"
     assert discord_user_id_from_origin(origin) == "130283160301862913"
     assert discord_user_id_from_origin("vape-session") == ""
+
+    channel_origin = discord_channel_origin_session_id("1504773998330773646")
+    assert channel_origin == "discord-channel:1504773998330773646"
+    assert discord_channel_id_from_origin(channel_origin) == "1504773998330773646"
+    assert discord_channel_id_from_origin(origin) == ""
 
 
 def test_discord_tool_requires_message_and_uses_allowlist():
@@ -57,6 +70,27 @@ def test_discord_service_formats_dm_tool_error_when_not_connected(tmp_path):
 
     assert result["status"] == "error"
     assert result["error"] == "Discord bot is not connected."
+
+
+def test_discord_service_sends_channel_message_when_connected(tmp_path):
+    asyncio.run(_test_discord_service_sends_channel_message_when_connected())
+
+
+async def _test_discord_service_sends_channel_message_when_connected():
+    service = DiscordBotService(
+        token="token",
+        client_id="1504771552921518190",
+        allowed_user_ids="130283160301862913",
+        codex_manager=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+    channel = FakeChannel()
+    service._client = SimpleNamespace(get_channel=lambda channel_id: channel)  # pylint: disable=protected-access
+    service._ready.set()  # pylint: disable=protected-access
+
+    result = await service.send_channel_message("1504773998330773646", "כל הכבוד")
+
+    assert result == {"status": "sent", "channel_id": "1504773998330773646"}
+    assert channel.messages == [("כל הכבוד", None)]
 
 
 def test_discord_accepts_job_with_reaction_and_no_reply():
@@ -130,6 +164,35 @@ async def _test_discord_completion_replies_only_final_output():
     await service.notify_codex_job_finished(job)
 
     assert message.channel.messages == [("Changed the test and it passes.", message)]
+
+
+def test_discord_completion_can_post_to_channel_origin():
+    asyncio.run(_test_discord_completion_can_post_to_channel_origin())
+
+
+async def _test_discord_completion_can_post_to_channel_origin():
+    service = DiscordBotService(
+        token="token",
+        client_id="1504771552921518190",
+        allowed_user_ids="130283160301862913",
+        codex_manager=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+    channel = FakeChannel()
+    service._client = SimpleNamespace(get_channel=lambda channel_id: channel)  # pylint: disable=protected-access
+    service._ready.set()  # pylint: disable=protected-access
+
+    job = CodexJob(
+        id="job-1",
+        task="coach tally",
+        workspace=Path("/tmp"),
+        execution_mode="app_server",
+        origin_session_id=discord_channel_origin_session_id("1504773998330773646"),
+        status="succeeded",
+        final_output="טלי, ריצה חזקה היום.",
+    )
+    await service.notify_codex_job_finished(job)
+
+    assert channel.messages == [("טלי, ריצה חזקה היום.", None)]
 
 
 def test_discord_sends_still_working_after_delay(monkeypatch):
