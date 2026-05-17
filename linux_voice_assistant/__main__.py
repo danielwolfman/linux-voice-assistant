@@ -161,8 +161,8 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
 
     from .ha_tools.settings_listener import HomeAssistantSettingsListener
     from .tools.codex_agent import CodexJobManager
+    from .tools.codex_tasks import CodexTaskService, is_silent_codex_task_origin
     from .tools.discord_bridge import DiscordBotService, discord_channel_id_from_origin, discord_user_id_from_origin
-    from .tools.running_coach import RunningCoachService
     from .vape.server import VoiceSessionRegistry, create_app, create_session_factory
 
     config = _prepare_vape_server_config(config)
@@ -182,6 +182,8 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
     discord_service: DiscordBotService | None = None
 
     async def notify_codex_job_finished(job) -> None:
+        if is_silent_codex_task_origin(job.origin_session_id):
+            return
         if discord_user_id_from_origin(job.origin_session_id) or discord_channel_id_from_origin(job.origin_session_id):
             if discord_service is not None:
                 await discord_service.notify_codex_job_finished(job)
@@ -211,11 +213,8 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
         completion_callback=voice_sessions.notify_timer_finished,
         finished_sound=config.timer_finished_sound,
     )
-    running_coach_service = RunningCoachService(
+    codex_task_service = CodexTaskService(
         codex_manager=codex_manager,
-        ha_url=config.ha_url,
-        ha_token=config.ha_token,
-        ha_verify_ssl=config.ha_verify_ssl,
     )
 
     async def apply_discord_settings(settings: dict[str, object]) -> None:
@@ -259,7 +258,7 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
         path=config.vape_server_path,
         on_session_closed=voice_sessions.unregister,
     )
-    running_coach_service.register_routes(app)
+    codex_task_service.register_routes(app)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, config.vape_server_host, config.vape_server_port)
@@ -274,7 +273,7 @@ async def run_vape_server_frontend(config: AppConfig) -> None:
     finally:
         await discord_settings_listener.close()
         await discord_service.close()
-        await running_coach_service.close()
+        await codex_task_service.close()
         await timer_manager.close()
         await codex_manager.close()
         await runner.cleanup()
