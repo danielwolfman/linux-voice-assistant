@@ -236,11 +236,13 @@ class SatelliteSessionHandler:
         session_id: str = "",
         on_activity: Optional[SessionActivityCallback] = None,
         wake_grace_seconds: float = _WAKE_GRACE_AFTER_CONNECT_SECONDS,
+        wake_grace_started_at: Optional[float] = None,
     ) -> None:
         self._controller = controller
         self.session_id = session_id
         self._on_activity = on_activity
         self._created_at = time.monotonic()
+        self._wake_grace_started_at = wake_grace_started_at if wake_grace_started_at is not None else self._created_at
         self._wake_grace_seconds = wake_grace_seconds
 
     @property
@@ -290,7 +292,7 @@ class SatelliteSessionHandler:
             return False
         if source.lower() in {"button", "hotkey", "manual", "click"}:
             return False
-        return (time.monotonic() - self._created_at) < self._wake_grace_seconds
+        return (time.monotonic() - self._wake_grace_started_at) < self._wake_grace_seconds
 
 
 SessionFactory = Callable[[PcmFormat, SendJson, SendBinary, str], SatelliteSessionHandler]
@@ -303,6 +305,8 @@ def create_session_factory(
     on_session_started: Optional[SessionStartedCallback] = None,
     on_session_activity: Optional[SessionActivityCallback] = None,
 ) -> SessionFactory:
+    wake_grace_started_at = time.monotonic()
+
     def factory(selected_format: PcmFormat, send_json: SendJson, send_binary: SendBinary, session_id: str) -> SatelliteSessionHandler:
         sink = RemotePlaybackSink(
             selected_input_format=selected_format,
@@ -313,7 +317,7 @@ def create_session_factory(
         controller = make_controller(sink, selected_format, session_id)
         if on_session_started is not None:
             on_session_started(session_id, controller)
-        return SatelliteSessionHandler(controller, session_id=session_id, on_activity=on_session_activity)
+        return SatelliteSessionHandler(controller, session_id=session_id, on_activity=on_session_activity, wake_grace_started_at=wake_grace_started_at)
 
     return factory
 

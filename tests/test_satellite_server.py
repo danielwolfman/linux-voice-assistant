@@ -1,4 +1,5 @@
 import asyncio
+import time
 import wave
 
 from aiohttp.test_utils import TestClient, TestServer
@@ -123,6 +124,28 @@ async def _test_satellite_server_allows_manual_wake_during_startup_grace():
         await ws.close()
     finally:
         await client.close()
+
+
+def test_satellite_handler_allows_wake_after_backend_startup_grace():
+    asyncio.run(_test_satellite_handler_allows_wake_after_backend_startup_grace())
+
+
+async def _test_satellite_handler_allows_wake_after_backend_startup_grace():
+    controller = FakeController()
+    sent_json = []
+    handler = SatelliteSessionHandler(
+        controller,
+        wake_grace_seconds=10,
+        wake_grace_started_at=time.monotonic() - 20,
+    )
+
+    async def send_json(payload):
+        sent_json.append(payload)
+
+    await handler.handle_control('{"type":"wake_detected","wake_word":"okay_nabu"}', send_json)
+
+    assert sent_json[0]["type"] == "start_capture"
+    assert controller.wake_words[0].wake_word == "okay_nabu"
 
 
 def test_remote_playback_sink_sends_start_audio_and_stop():
