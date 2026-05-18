@@ -389,12 +389,13 @@ class SessionController:
             _LOGGER.debug("Ignoring intermediate response.done while awaiting additional tool or final answer")
             return
 
+        should_end_session = self._should_end_session_after_response(transcript)
         self._remember_completed_interaction(transcript)
 
         if self._response_delay_task is not None:
             self._response_delay_task.cancel()
 
-        if self._should_end_session_after_response(transcript):
+        if should_end_session:
             self._response_delay_task = asyncio.create_task(self._end_session_after_response())
         else:
             self._response_delay_task = asyncio.create_task(self._return_to_follow_up_listening())

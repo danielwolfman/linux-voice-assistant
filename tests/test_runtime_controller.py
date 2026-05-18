@@ -328,6 +328,37 @@ def test_completed_response_persists_tool_context_with_interaction(tmp_path):
     assert controller._pending_tool_memory == []
 
 
+def test_question_response_keeps_follow_up_listening_after_memory_save(tmp_path):
+    async def run():
+        controller = object.__new__(SessionController)
+        controller.phase = SessionPhase.PLAYING_OUTPUT
+        controller._notification_response_active = False
+        controller._pending_user_transcript = "Are you there?"
+        controller._pending_tool_memory = []
+        controller._tool_called_in_response_chain = False
+        controller._end_session_requested = False
+        controller._interaction_memory = InteractionMemoryStore(tmp_path / "interaction_memory.json")
+        controller._response_delay_task = None
+        calls = []
+
+        async def return_to_follow_up_listening():
+            calls.append("follow_up")
+
+        async def end_session_after_response():
+            calls.append("end")
+
+        controller._return_to_follow_up_listening = return_to_follow_up_listening
+        controller._end_session_after_response = end_session_after_response
+
+        await controller._on_response_done("response-1", "completed", {}, "Yes, what do you need?", "gpt-realtime")
+        await asyncio.sleep(0)
+
+        assert calls == ["follow_up"]
+        assert controller._pending_user_transcript is None
+
+    asyncio.run(run())
+
+
 def test_refresh_realtime_memory_context_uses_configured_count(tmp_path):
     async def run():
         captured = []
